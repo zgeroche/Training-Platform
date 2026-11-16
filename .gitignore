@@ -1,0 +1,14 @@
+# Secrets and local data -- never commit these
+.env
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
