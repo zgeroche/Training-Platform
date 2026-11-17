@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run · Training Platform</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  /* Wider page so route, splits and heart rate sit side by side, with the pace chart
+     right underneath: hovering the chart then keeps the map in view. */
+  .page { max-width: 1560px; padding-left: 24px; padding-right: 24px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 1180px) {
+    .layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .layout > :first-child { grid-column: 1 / -1; }
+  }
+  @media (max-width: 720px) {
+    .page { padding-left: 16px; padding-right: 16px; }
+    .layout { grid-template-columns: minmax(0, 1fr); }
+  }
+  #map { height: 360px; border-radius: 8px; background: var(--line); }
+  .no-route { height: 200px; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 16px; }
+  .mile-marker { background: var(--surface); color: var(--fg); border: 2px solid var(--accent); border-radius: 999px;
+                 font: 600 11px/18px var(--font); width: 22px; height: 22px; text-align: center; }
+  .pace-bar { height: 8px; border-radius: 4px; background: var(--accent); min-width: 2px; }
+  td.bar { width: 35%; min-width: 80px; }
+  .zones { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--line); margin: 6px 0 10px; }
+  .zones > div { height: 100%; }
+  .zone-legend { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; font-size: 13px; align-items: center; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; }
+  .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+
+  .chart-head { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; justify-content: space-between; }
+  .chart-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .key { display: inline-block; width: 16px; height: 0; border-top: 3px solid var(--accent); }
+  .key-avg { border-top: 2px dashed var(--muted); }
+  .key-elev { height: 8px; border: 0; background: var(--elev); border-radius: 2px; }
+  .chart-wrap { position: relative; }
+  .chart-wrap svg { display: block; width: 100%; height: auto; touch-action: none; }
+  .chart-wrap text { fill: var(--muted); font: 11px var(--font); font-variant-numeric: tabular-nums; }
+  .grid { stroke: var(--line); stroke-width: 1; }
+  .pace-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .avg-line { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 4; }
+  .elev-area { fill: var(--elev); }
+  .cursor { stroke: var(--fg); stroke-width: 1; opacity: .5; }
+  .cursor-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .tip { position: absolute; top: 4px; pointer-events: none; background: var(--surface); border: 1px solid var(--line);
+         border-radius: 6px; padding: 4px 8px; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums;
+         box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+  :root { --elev: rgba(93, 107, 122, .16); }
+  @media (prefers-color-scheme: dark) { :root { --elev: rgba(147, 162, 178, .16); } }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="crumbs"><a href="/">Training Platform</a> / <a href="/runs">Runs</a></div>
+  <header>
+    <h1 id="title">Loading run…</h1>
+    <p class="sub" id="subtitle"></p>
+  </header>
+
+  <section class="panel stats" id="stats"></section>
+
+  <div class="layout">
+    <section class="panel">
+      <h2>Route</h2>
+      <div id="map-slot"></div>
+    </section>
+
+      <section class="panel">
+        <h2>Splits</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Mile</th><th class="r">Pace /mi</th><th></th><th class="r">Elev (ft)</th></tr></thead>
+            <tbody id="splits"></tbody>
+          </table>
+        </div>
+        <p class="note" id="splits-note"></p>
+      </section>
+
+      <section class="panel" id="whoop-panel">
+        <h2>Heart rate (WHOOP)</h2>
+        <div id="whoop"></div>
+      </section>
+  </div>
+
+  <section class="panel">
+    <div class="chart-head">
+      <h2>Pace</h2>
+      <div class="chart-legend">
+        <span><i class="key key-pace"></i>Pace (20-second average)</span>
+        <span><i class="key key-avg"></i>Run average</span>
+        <span><i class="key key-elev"></i>Elevation</span>
+      </div>
+    </div>
+    <div class="chart-wrap" id="pace-chart">
+      <p class="muted">Loading pace data…</p>
+    </div>
+    <p class="note" id="pace-note"></p>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/static/common.js"></script>
+<script>
+const TINY_SPLIT_MI = 0.05;  // leftover from pressing Stop just after a mile marker
+const ZONES = [
+  ["zone_one_milli", "Zone 1", "--z1"], ["zone_two_milli", "Zone 2", "--z2"], ["zone_three_milli", "Zone 3", "--z3"],
+  ["zone_four_milli", "Zone 4", "--z4"], ["zone_five_milli", "Zone 5", "--z5"],
+];
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function stat(label, value, src) {
+  return el("div", { class: "stat" },
+    el("span", { class: "label" }, label), el("span", { class: "value" }, value),
+    src ? el("span", { class: "src" }, src) : "");
+}
+
+function renderStats(run) {
+  const w = run.whoop;
+  document.getElementById("stats").append(
+    stat("Distance", `${fmtNum(run.distance_mi, 2)} mi`, "Samsung"),
+    stat("Duration", fmtDuration(run.duration_ms), "Samsung, moving time"),
+    stat("Avg pace", `${fmtPace(run.pace_sec_per_mile)} /mi`, "Samsung"),
+    stat("Elev gain", run.altitude_gain_m == null ? "–" : `${fmtNum(run.altitude_gain_m * FT_PER_M)} ft`, "Samsung"),
+    stat("Strain", w ? fmtNum(w.strain, 1) : "–", "WHOOP"),
+    stat("Avg / max HR", w ? `${fmtNum(w.average_heart_rate)} / ${fmtNum(w.max_heart_rate)}` : "–", "WHOOP"),
+  );
+}
+
+function splitElevations(route) {
+  // Net altitude change per split, from the first and last GPS point in it.
+  const out = {};
+  for (const [, , alt, , idx] of route) {
+    if (idx == null || alt == null) continue;
+    out[idx] ??= { first: alt, last: alt };
+    out[idx].last = alt;
+  }
+  return out;
+}
+
+let segments = {};
+let leafletMap = null;
+
+// ---------- pace chart ----------
+
+const SMOOTH_MS = 20000;   // rolling window for speed, so GPS jitter doesn't dominate
+const BUCKETS = 400;       // points drawn across the run
+const STOPPED_MPS = 0.8;   // slower than ~33:30/mi counts as stopped: drawn as a gap
+
+function smoothSpeeds(rows) {
+  // Centered moving average over SMOOTH_MS of active time. rows: [elapsed_ms, distance_m, speed_mps]
+  const out = new Array(rows.length);
+  let lo = 0, hi = 0, sum = 0, n = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const t = rows[i][0];
+    while (hi < rows.length && rows[hi][0] <= t + SMOOTH_MS / 2) {
+      if (rows[hi][2] != null) { sum += rows[hi][2]; n++; }
+      hi++;
+    }
+    while (rows[lo][0] < t - SMOOTH_MS / 2) {
+      if (rows[lo][2] != null) { sum -= rows[lo][2]; n--; }
+      lo++;
+    }
+    out[i] = n ? sum / n : null;
+  }
+  return out;
+}
+
+function bucketize(xs, ys, total) {
+  // Average ys into BUCKETS equal-distance slots along x.
+  const sum = new Array(BUCKETS).fill(0), cnt = new Array(BUCKETS).fill(0);
+  for (let i = 0; i < xs.length; i++) {
+    if (ys[i] == null) continue;
+    const b = Math.min(BUCKETS - 1, Math.max(0, Math.floor((xs[i] / total) * BUCKETS)));
+    sum[b] += ys[i]; cnt[b]++;
+  }
+  return sum.map((s, b) => ({ x: ((b + 0.5) / BUCKETS) * total, y: cnt[b] ? s / cnt[b] : null }));
+}
+
+function interpolate(sortedXs, ys, x) {
+  // Linear interpolation of y at x (sortedXs ascending).
+  let lo = 0, hi = sortedXs.length - 1;
+  if (x <= sortedXs[0]) return ys[0];
+  if (x >= sortedXs[hi]) return ys[hi];
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; (sortedXs[mid] <= x ? (lo = mid) : (hi = mid)); }
+  const f = (x - sortedXs[lo]) / (sortedXs[hi] - sortedXs[lo] || 1);
+  return ys[lo] + f * (ys[hi] - ys[lo]);
+}
+
+function quantile(sorted, q) {
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
+}
+
+function prepareChartData(run, samples) {
+  const rows = samples.rows.filter((r) => r[1] != null);
+  if (rows.length < 10) return null;
+  const total = rows[rows.length - 1][1];
+  const smooth = smoothSpeeds(rows);
+  const pace = bucketize(rows.map((r) => r[1]), smooth, total)
+    .map((p) => ({ x: p.x, y: p.y != null && p.y > STOPPED_MPS ? MILE_M / p.y : null }));
+
+  // Route points carry active elapsed time; turn that into distance using the speed samples.
+  const sampleT = rows.map((r) => r[0]), sampleD = rows.map((r) => r[1]);
+  const route = (run.route || []).filter((p) => p[3] != null);
+  const routeD = route.map((p) => interpolate(sampleT, sampleD, p[3]));
+  const elev = route.length
+    ? bucketize(routeD, route.map((p) => p[2]), total).map((p) => ({ x: p.x, y: p.y }))
+    : [];
+  return { total, pace, elev, route, routeD };
+}
+
+function niceStep(range, target, steps) {
+  return steps.find((s) => range / s <= target) || steps[steps.length - 1];
+}
+
+let paceData = null;
+
+function renderPaceChart(run) {
+  const wrap = document.getElementById("pace-chart");
+  const d = paceData;
+  if (!d) {
+    wrap.replaceChildren(el("p", { class: "muted" }, "No speed data was recorded for this run."));
+    return;
+  }
+  const W = Math.max(320, wrap.clientWidth), H = Math.round(Math.min(260, Math.max(220, W * 0.32)));
+  const m = { l: 52, r: 14, t: 12, b: 30 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+
+  // Y: pace, faster at the top. Use the 2nd-98th percentile so a stop or a GPS spike doesn't flatten the line.
+  const paces = d.pace.map((p) => p.y).filter((y) => y != null).sort((a, b) => a - b);
+  const avg = run.pace_sec_per_mile;
+  let fast = Math.min(quantile(paces, 0.02), avg || Infinity);
+  let slow = Math.max(quantile(paces, 0.98), avg || 0);
+  const pad = Math.max(10, (slow - fast) * 0.08);
+  fast -= pad; slow += pad;
+  const yOf = (pace) => m.t + ((Math.min(slow, Math.max(fast, pace)) - fast) / (slow - fast)) * ih;
+  const xOf = (dist) => m.l + (dist / d.total) * iw;
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `Pace over the run. Average ${fmtPace(avg)} per mile.`);
+  const add = (tag, attrs, text) => {
+    const n = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    if (text != null) n.textContent = text;
+    svg.append(n);
+    return n;
+  };
+
+  // Elevation, faint, in the lower 40% of the plot.
+  const elevVals = d.elev.map((p) => p.y).filter((y) => y != null);
+  if (elevVals.length > 1) {
+    const eMin = Math.min(...elevVals), eMax = Math.max(...elevVals), eRange = Math.max(eMax - eMin, 5);
+    const eY = (alt) => m.t + ih - ((alt - eMin) / eRange) * ih * 0.4;
+    let path = `M${xOf(0)},${m.t + ih}`;
+    let last = elevVals[0];
+    for (const p of d.elev) { last = p.y ?? last; path += ` L${xOf(p.x).toFixed(1)},${eY(last).toFixed(1)}`; }
+    path += ` L${xOf(d.total)},${m.t + ih} Z`;
+    add("path", { d: path, class: "elev-area" });
+  }
+
+  // Grid: one line per pace step, one per mile.
+  const yStep = niceStep(slow - fast, 6, [10, 15, 30, 60, 120, 300]);
+  for (let p = Math.ceil(fast / yStep) * yStep; p <= slow; p += yStep) {
+    add("line", { x1: m.l, x2: W - m.r, y1: yOf(p), y2: yOf(p), class: "grid" });
+    add("text", { x: m.l - 8, y: yOf(p) + 4, "text-anchor": "end" }, fmtPace(p));
+  }
+  const miles = d.total / MILE_M;
+  const xStep = niceStep(miles, 14, [0.25, 0.5, 1, 2, 5]);
+  for (let mi = 0; mi <= miles + 1e-9; mi += xStep) {
+    const x = xOf(mi * MILE_M);
+    add("line", { x1: x, x2: x, y1: m.t, y2: m.t + ih, class: "grid" });
+    add("text", { x, y: H - 10, "text-anchor": "middle" }, mi === 0 ? "0 mi" : String(+mi.toFixed(2)));
+  }
+  add("text", { x: 4, y: m.t + 10 }, "faster");
+  add("text", { x: 4, y: m.t + ih }, "slower");
+
+  // Average pace, then the pace line (with gaps where you were stopped).
+  if (avg) add("line", { x1: m.l, x2: W - m.r, y1: yOf(avg), y2: yOf(avg), class: "avg-line" });
+  let path = "", pen = false;
+  for (const p of d.pace) {
+    if (p.y == null) { pen = false; continue; }
+    path += `${pen ? "L" : "M"}${xOf(p.x).toFixed(1)},${yOf(p.y).toFixed(1)} `;
+    pen = true;
+  }
+  add("path", { d: path, class: "pace-line" });
+
+  // Hover: cursor line, dot, tooltip, and the matching spot on the map.
+  const cursor = add("line", { y1: m.t, y2: m.t + ih, class: "cursor", visibility: "hidden" });
+  const dot = add("circle", { r: 4.5, class: "cursor-dot", visibility: "hidden" });
+  const tip = el("div", { class: "tip", hidden: "" });
+  const overlay = add("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" });
+
+  function show(evt) {
+    const rect = svg.getBoundingClientRect();
+    const sx = ((evt.clientX - rect.left) / rect.width) * W;
+    const dist = Math.min(d.total, Math.max(0, ((sx - m.l) / iw) * d.total));
+    const b = Math.min(BUCKETS - 1, Math.floor((dist / d.total) * BUCKETS));
+    const p = d.pace[b], e = d.elev[b];
+    const x = xOf(dist);
+    cursor.setAttribute("x1", x); cursor.setAttribute("x2", x); cursor.setAttribute("visibility", "visible");
+    if (p.y != null) {
+      dot.setAttribute("cx", x); dot.setAttribute("cy", yOf(p.y)); dot.setAttribute("visibility", "visible");
+    } else dot.setAttribute("visibility", "hidden");
+    const parts = [`${(dist / MILE_M).toFixed(2)} mi`, p.y != null ? `${fmtPace(p.y)} /mi` : "stopped"];
+    if (e && e.y != null) parts.push(`${Math.round(e.y * FT_PER_M).toLocaleString()} ft`);
+    tip.textContent = parts.join(" · ");
+    tip.hidden = false;
+    const left = (x / W) * rect.width;
+    tip.style.left = `${Math.min(rect.width - tip.offsetWidth - 4, Math.max(4, left + 10))}px`;
+    moveMapMarker(dist);
+  }
+  function hide() {
+    cursor.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden");
+    tip.hidden = true; moveMapMarker(null);
+  }
+  overlay.addEventListener("pointermove", show);
+  overlay.addEventListener("pointerdown", show);
+  overlay.addEventListener("pointerleave", hide);
+
+  wrap.replaceChildren(svg, tip);
+
+  const noteBits = ["Hover the chart to see that spot on the map."];
+  if (d.pace.some((p) => p.y == null)) noteBits.push("Gaps are where you were stopped or the watch lost speed.");
+  document.getElementById("pace-note").textContent = noteBits.join(" ");
+}
+
+let mapMarker = null;
+function moveMapMarker(dist) {
+  if (!leafletMap || !paceData || !paceData.route.length) return;
+  if (dist == null) { if (mapMarker) { mapMarker.remove(); mapMarker = null; } return; }
+  // Nearest route point by distance.
+  const ds = paceData.routeD;
+  let lo = 0, hi = ds.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; (ds[mid] <= dist ? (lo = mid) : (hi = mid)); }
+  const p = paceData.route[Math.abs(ds[lo] - dist) <= Math.abs(ds[hi] - dist) ? lo : hi];
+  if (!mapMarker) {
+    mapMarker = L.circleMarker([p[0], p[1]], { radius: 8, color: "#fff", weight: 3, fillColor: css("--accent"), fillOpacity: 1 })
+      .addTo(leafletMap);
+  } else mapMarker.setLatLng([p[0], p[1]]);
+}
+
+function renderMap(run) {
+  const slot = document.getElementById("map-slot");
+  if (!run.route || run.route.length < 2) {
+    slot.append(el("div", { class: "no-route" }, "No GPS for this run, so there's no map. It was probably a treadmill or indoor run."));
+    return;
+  }
+  if (typeof L === "undefined") {
+    slot.append(el("div", { class: "no-route error" }, "The map library didn't load. Check the internet connection and reload."));
+    return;
+  }
+  slot.append(el("div", { id: "map" }));
+  const map = L.map("map", { scrollWheelZoom: false });
+  leafletMap = map;
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: "© OpenStreetMap contributors",
+  }).addTo(map);
+
+  // One line per mile, alternating two tones so the miles are easy to tell apart.
+  const bySplit = {};
+  for (const [lat, lon, , , idx] of run.route) (bySplit[idx ?? 0] ??= []).push([lat, lon]);
+  const keys = Object.keys(bySplit).map(Number).sort((a, b) => a - b);
+  keys.forEach((k, i) => {
+    // Join each mile to the start of the next so the line has no gaps.
+    const next = bySplit[keys[i + 1]];
+    const pts = next ? [...bySplit[k], next[0]] : bySplit[k];
+    segments[k] = L.polyline(pts, { color: i % 2 ? css("--accent-2") : css("--accent"), weight: 5, opacity: 0.9 }).addTo(map);
+    if (next) {
+      L.marker(next[0], {
+        icon: L.divIcon({ className: "mile-marker", html: String(k), iconSize: [22, 22] }),
+        title: `Mile ${k}`,
+      }).addTo(map);
+    }
+  });
+  const pts = run.route.map(([lat, lon]) => [lat, lon]);
+  L.circleMarker(pts[0], { radius: 7, color: "#fff", weight: 2, fillColor: "#2e9e5b", fillOpacity: 1 })
+    .bindTooltip("Start").addTo(map);
+  L.circleMarker(pts[pts.length - 1], { radius: 7, color: "#fff", weight: 2, fillColor: "#c94a44", fillOpacity: 1 })
+    .bindTooltip("Finish").addTo(map);
+  map.fitBounds(L.latLngBounds(pts), { padding: [20, 20] });
+}
+
+function highlight(idx, on) {
+  const seg = segments[idx];
+  if (seg) seg.setStyle({ weight: on ? 9 : 5 }) && on && seg.bringToFront();
+}
+
+function renderSplits(run) {
+  const body = document.getElementById("splits");
+  const elev = splitElevations(run.route || []);
+  const shown = run.splits.filter((s) => !(s.is_partial && s.distance_m / MILE_M < TINY_SPLIT_MI));
+  const hidden = run.splits.length - shown.length;
+  if (!shown.length) {
+    body.append(el("tr", {}, el("td", { colspan: 4, class: "empty" }, "No splits recorded for this run.")));
+    return;
+  }
+  // Bar length shows speed relative to this run's own range, so small pace changes are visible:
+  // the slowest split gets a short bar, the fastest a full one.
+  const speedOf = (s) => 1 / s.pace_sec_per_mile;
+  const fullSpeeds = shown.filter((s) => !s.is_partial).map(speedOf);
+  const all = shown.map(speedOf);
+  const lo = Math.min(...all), hi = Math.max(...all);
+  const barPct = (v) => (hi - lo < 1e-9 ? 100 : 25 + (75 * (v - lo)) / (hi - lo));
+  const fastest = fullSpeeds.length > 1 ? Math.max(...fullSpeeds) : null;
+  for (const s of shown) {
+    const e = elev[s.split_index];
+    const change = e ? Math.round((e.last - e.first) * FT_PER_M) : null;
+    const label = s.is_partial
+      ? `${(s.distance_m / MILE_M).toFixed(2)} mi (${fmtDuration(s.duration_ms)})`
+      : String(s.split_index);
+    const isFastest = !s.is_partial && fastest && speedOf(s) === fastest;
+    body.append(el("tr", {
+      class: "link", tabindex: "0",
+      onmouseenter: () => highlight(s.split_index, true), onmouseleave: () => highlight(s.split_index, false),
+      onfocus: () => highlight(s.split_index, true), onblur: () => highlight(s.split_index, false),
+    },
+      el("td", {}, label, isFastest ? el("span", { class: "badge ok", style: "margin-left:6px" }, "Fastest") : ""),
+      el("td", { class: "r" }, fmtPace(s.pace_sec_per_mile)),
+      el("td", { class: "bar" }, el("div", { class: "pace-bar",
+        style: `width:${barPct(speedOf(s)).toFixed(1)}%; opacity:${s.is_partial ? 0.45 : 1}` })),
+      el("td", { class: "r" }, change == null ? "–" : change > 0 ? `+${change}` : String(change)),
+    ));
+  }
+  const notes = ["Longer bar = faster mile."];
+  if (run.route && run.route.length > 1) notes.push("Hover a mile to highlight it on the map.");
+  if (hidden) notes.push("A few meters recorded after the last mile marker are left out.");
+  document.getElementById("splits-note").textContent = notes.join(" ");
+}
+
+function renderWhoop(run) {
+  const box = document.getElementById("whoop");
+  const w = run.whoop;
+  if (!w) {
+    box.append(el("p", { class: "muted" }, "WHOOP didn't record a workout during this run, so there's no heart-rate data."));
+    return;
+  }
+  const total = ZONES.reduce((sum, [k]) => sum + (w[k] || 0), 0);
+  const bar = el("div", { class: "zones", role: "img", "aria-label": "Time in heart-rate zones" });
+  const legend = el("div", { class: "zone-legend" });
+  for (const [key, name, color] of ZONES) {
+    const ms = w[key] || 0;
+    const pct = total ? (100 * ms) / total : 0;
+    bar.append(el("div", { style: `width:${pct}%; background:var(${color})`, title: `${name}: ${fmtDuration(ms)}` }));
+    legend.append(
+      el("span", { class: "swatch", style: `background:var(${color})` }),
+      el("span", {}, name),
+      el("span", { class: "num muted" }, `${fmtDuration(ms)} · ${pct.toFixed(0)}%`),
+    );
+  }
+  box.append(
+    el("div", { class: "stats", style: "margin-bottom:12px" },
+      stat("Avg HR", `${fmtNum(w.average_heart_rate)} bpm`),
+      stat("Max HR", `${fmtNum(w.max_heart_rate)} bpm`),
+      stat("Calories", w.kilojoule == null ? "–" : `${fmtNum(w.kilojoule / 4.184)} kcal`),
+    ),
+    el("div", { class: "muted", style: "font-size:13px" }, "Time in heart-rate zones"),
+    bar, legend,
+  );
+  const startDiff = w.start_diff_seconds;
+  box.append(el("p", { class: "note" },
+    `WHOOP auto-detected this workout ${Math.abs(startDiff) < 60 ? "within a minute of" :
+      `${Math.round(Math.abs(startDiff) / 60)} min ${startDiff > 0 ? "after" : "before"}`} your Start press. ` +
+    "WHOOP's workout usually runs past your Stop, so heart-rate figures can include a few minutes of cool-down."));
+}
+
+(async function () {
+  const id = decodeURIComponent(location.pathname.split("/").pop());
+  try {
+    const [run, samples] = await Promise.all([
+      getJSON(`/api/runs/${encodeURIComponent(id)}`),
+      getJSON(`/api/runs/${encodeURIComponent(id)}/samples`).catch(() => ({ rows: [] })),
+    ]);
+    const when = fmtDate(run.start, run.timezone_offset,
+      { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+    const time = fmtDate(run.start, run.timezone_offset, { hour: "numeric", minute: "2-digit" });
+    document.title = `${fmtNum(run.distance_mi, 2)} mi run, ${fmtDate(run.start, run.timezone_offset, { month: "short", day: "numeric" })}`;
+    document.getElementById("title").textContent = `${fmtNum(run.distance_mi, 2)} mi run`;
+    document.getElementById("subtitle").textContent = `${when} · started ${time}`;
+    renderStats(run);
+    renderMap(run);
+    renderSplits(run);
+    renderWhoop(run);
+    paceData = prepareChartData(run, samples);
+    renderPaceChart(run);
+    let resizeTimer;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => renderPaceChart(run), 150);
+    });
+  } catch (err) {
+    document.getElementById("title").textContent = "Couldn't load this run";
+    document.getElementById("subtitle").textContent = err.message;
+  }
+})();
+</script>
+</body>
+</html>

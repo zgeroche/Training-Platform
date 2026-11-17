@@ -159,6 +159,19 @@ class SamsungRoutePoint(Base):
     accuracy_m: Mapped[float | None]
 
 
+class SamsungSample(Base):
+    """Samsung's ~1 per second readings during a run (speed, distance, cadence; never heart rate)."""
+
+    __tablename__ = "samsung_sample"
+
+    run_id: Mapped[str] = mapped_column(String, primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    elapsed_ms: Mapped[int]  # active time since start (pauses excluded)
+    distance_m: Mapped[float]  # cumulative distance at this sample
+    speed_mps: Mapped[float | None]
+    cadence: Mapped[float | None]
+
+
 class SamsungSplit(Base):
     """One auto-lap from the watch: a full mile, or the partial remainder at the end."""
 

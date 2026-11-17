@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, init_db, utcnow
 from app.matching import rebuild_matches
-from app.models import SamsungRoutePoint, SamsungRun, SamsungSplit
+from app.models import SamsungRoutePoint, SamsungRun, SamsungSample, SamsungSplit
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +37,10 @@ PARTIAL_THRESHOLD = 0.98  # a split shorter than 98% of a mile is the partial re
 # Accidental Start presses: in the real export these were all <= 17 m, and the shortest
 # real run was over 400 m, so 100 m separates them cleanly.
 MIN_RUN_DISTANCE_M = 100.0
+# Recording glitches: an average pace faster than 4:00/mi (about world-record mile pace)
+# can't be a real run. The one glitch in the real export averaged 0:57/mi; the fastest
+# real run averaged 7:35/mi.
+MIN_PACE_SEC_PER_MILE = 240.0
 
 
 @dataclass
@@ -47,6 +51,7 @@ class ImportResult:
     splits: int = 0
     matched: int = 0  # runs linked to a WHOOP workout after the import
     accidental: int = 0  # near-zero-distance runs left out (accidental Start presses)
+    implausible: int = 0  # runs with an impossible average pace (recording glitches) left out
     skipped: list[str] = field(default_factory=list)
 
 
@@ -152,6 +157,28 @@ def build_splits(live: list[dict], internal: list[dict], duration_ms: int | None
     return splits
 
 
+def build_samples(live: list[dict], internal: list[dict]) -> list[dict]:
+    """Per-second speed/distance/cadence, keyed by active elapsed time. Heart rate is dropped."""
+    meta = {m["start_time"]: m for m in internal}
+    samples = []
+    total = 0.0
+    for sample in sorted(live, key=lambda x: x["start_time"]):
+        m = meta.get(sample["start_time"])
+        if m is None or ("speed" not in sample and "distance" not in sample):
+            continue  # HR-only rows and rows without timing are skipped
+        total += sample.get("distance") or 0.0
+        samples.append(
+            {
+                "seq": len(samples),
+                "elapsed_ms": m["elapsed_time"],
+                "distance_m": total,
+                "speed_mps": sample.get("speed"),
+                "cadence": sample.get("cadence"),
+            }
+        )
+    return samples
+
+
 def build_route(location: list[dict], location_internal: list[dict] | None) -> list[dict]:
     meta = {m["start_time"]: m for m in (location_internal or [])}
     points = []
@@ -176,13 +203,23 @@ def build_route(location: list[dict], location_internal: list[dict] | None) -> l
 
 # ---------- import ----------
 
-def _replace_children(session: Session, run_id: str, splits: list[dict], route: list[dict]) -> None:
-    session.execute(delete(SamsungSplit).where(SamsungSplit.run_id == run_id))
-    session.execute(delete(SamsungRoutePoint).where(SamsungRoutePoint.run_id == run_id))
-    if splits:
-        session.execute(insert(SamsungSplit), [{"run_id": run_id, **s} for s in splits])
-    if route:
-        session.execute(insert(SamsungRoutePoint), [{"run_id": run_id, **p} for p in route])
+CHILD_TABLES = (SamsungSplit, SamsungRoutePoint, SamsungSample)
+
+
+def _replace_children(
+    session: Session, run_id: str, splits: list[dict], route: list[dict], samples: list[dict]
+) -> None:
+    for model in CHILD_TABLES:
+        session.execute(delete(model).where(model.run_id == run_id))
+    for model, rows in ((SamsungSplit, splits), (SamsungRoutePoint, route), (SamsungSample, samples)):
+        if rows:
+            session.execute(insert(model), [{"run_id": run_id, **r} for r in rows])
+
+
+def _remove_run(session: Session, run_id: str) -> None:
+    for model in CHILD_TABLES:
+        session.execute(delete(model).where(model.run_id == run_id))
+    session.execute(delete(SamsungRun).where(SamsungRun.id == run_id))
 
 
 def import_rows(session: Session, rows: Iterable[dict[str, str]], index: dict[str, Path]) -> ImportResult:
@@ -196,14 +233,23 @@ def import_rows(session: Session, rows: Iterable[dict[str, str]], index: dict[st
             result.skipped.append(run_id or "<no id>")
             continue
 
-        if (_f(row.get(P + "distance")) or 0.0) < MIN_RUN_DISTANCE_M:
-            # Also remove it if an earlier import (before this rule existed) stored it.
-            _replace_children(session, run_id, [], [])
-            session.execute(delete(SamsungRun).where(SamsungRun.id == run_id))
-            result.accidental += 1
+        distance_m = _f(row.get(P + "distance")) or 0.0
+        duration_ms = _i(row.get(P + "duration"))
+        too_short = distance_m < MIN_RUN_DISTANCE_M
+        too_fast = (
+            not too_short
+            and bool(duration_ms)
+            and (duration_ms / 1000) / (distance_m / MILE_M) < MIN_PACE_SEC_PER_MILE
+        )
+        if too_short or too_fast:
+            # Also remove it if an earlier import (before these rules existed) stored it.
+            _remove_run(session, run_id)
+            if too_short:
+                result.accidental += 1
+            else:
+                result.implausible += 1
             continue
 
-        duration_ms = _i(row.get(P + "duration"))
         live =_load_json(index, row.get(P + "live_data")) or []
         live_internal = _load_json(index, row.get("live_data_internal")) or []
         location = _load_json(index, row.get(P + "location_data")) or []
@@ -211,6 +257,7 @@ def import_rows(session: Session, rows: Iterable[dict[str, str]], index: dict[st
 
         splits = build_splits(live, live_internal, duration_ms)
         route = build_route(location, location_internal)
+        samples = build_samples(live, live_internal)
 
         session.merge(
             SamsungRun(
@@ -238,7 +285,7 @@ def import_rows(session: Session, rows: Iterable[dict[str, str]], index: dict[st
             )
         )
         session.flush()
-        _replace_children(session, run_id, splits, route)
+        _replace_children(session, run_id, splits, route, samples)
 
         result.runs += 1
         result.with_route += bool(route)
@@ -268,5 +315,5 @@ if __name__ == "__main__":
     print(
         f"Imported {r.runs} runs ({r.with_route} with GPS): {r.route_points:,} route points, "
         f"{r.splits} splits. Matched to WHOOP: {r.matched}. "
-        f"Accidental runs left out: {r.accidental}. Skipped (bad rows): {len(r.skipped)}"
+        f"Left out: {r.accidental} accidental, {r.implausible} glitched. Skipped (bad rows): {len(r.skipped)}"
     )

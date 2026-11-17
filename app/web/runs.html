@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runs · Training Platform</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  th.sortable { padding: 0; }
+  th.sortable button {
+    all: unset; box-sizing: border-box; width: 100%; padding: 7px 10px; cursor: pointer;
+    display: inline-flex; gap: 6px; align-items: center; font: inherit; color: inherit;
+  }
+  th.r.sortable button { justify-content: flex-end; }
+  th.sortable button:hover { color: var(--fg); }
+  th.sortable button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .arrows { display: inline-flex; flex-direction: column; line-height: 7px; font-size: 9px; opacity: .45; }
+  .arrows span.on { color: var(--accent); opacity: 1; }
+  th[aria-sort="ascending"] .arrows, th[aria-sort="descending"] .arrows { opacity: 1; }
+  th[aria-sort] { color: var(--fg); }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="crumbs"><a href="/">Training Platform</a></div>
+  <header>
+    <h1>Runs</h1>
+    <p class="sub" id="summary">Loading…</p>
+  </header>
+
+  <section class="panel">
+    <div class="table-wrap">
+      <table>
+        <thead><tr id="head"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+const kcal = (r) => (r.whoop && r.whoop.kilojoule != null ? r.whoop.kilojoule / 4.184 : null);
+
+// Each column: how to show it, and the value it sorts by (null always sorts last).
+const COLUMNS = [
+  { key: "date", label: "Date", value: (r) => r.start,
+    show: (r) => fmtDate(r.start, r.timezone_offset,
+      { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) },
+  { key: "distance", label: "Distance (mi)", num: true, value: (r) => r.distance_mi, show: (r) => fmtNum(r.distance_mi, 2) },
+  { key: "duration", label: "Duration", num: true, value: (r) => r.duration_ms, show: (r) => fmtDuration(r.duration_ms) },
+  { key: "pace", label: "Pace /mi", num: true, value: (r) => r.pace_sec_per_mile, show: (r) => fmtPace(r.pace_sec_per_mile) },
+  { key: "kcal", label: "Calories (kcal)", num: true, value: kcal, show: (r) => fmtNum(kcal(r)) },
+  { key: "strain", label: "Strain", num: true, value: (r) => r.whoop?.strain, show: (r) => fmtNum(r.whoop?.strain, 1) },
+  { key: "avg_hr", label: "Avg HR", num: true, value: (r) => r.whoop?.average_heart_rate, show: (r) => fmtNum(r.whoop?.average_heart_rate) },
+  { key: "max_hr", label: "Max HR", num: true, value: (r) => r.whoop?.max_heart_rate, show: (r) => fmtNum(r.whoop?.max_heart_rate) },
+  { key: "whoop", label: "WHOOP", value: (r) => (r.whoop ? 1 : 0),
+    show: (r) => el("span", { class: r.whoop ? "badge ok" : "badge" }, r.whoop ? "Matched" : "No match") },
+];
+
+let runs = [];
+let sort = { key: "date", dir: "desc" };  // default: newest first
+
+function sortedRuns() {
+  const col = COLUMNS.find((c) => c.key === sort.key);
+  const sign = sort.dir === "asc" ? 1 : -1;
+  return [...runs].sort((a, b) => {
+    const va = col.value(a), vb = col.value(b);
+    const na = va == null, nb = vb == null;
+    if (na || nb) return na && nb ? 0 : na ? 1 : -1;  // missing values at the bottom either way
+    if (va < vb) return -sign;
+    if (va > vb) return sign;
+    return b.start.localeCompare(a.start);  // ties: newest first
+  });
+}
+
+function renderHead() {
+  const head = document.getElementById("head");
+  head.replaceChildren(...COLUMNS.map((c) => {
+    const active = sort.key === c.key;
+    const th = el("th", { class: `sortable${c.num ? " r" : ""}` },
+      el("button", { type: "button", onclick: () => setSort(c.key),
+                     "aria-label": `Sort by ${c.label}` },
+        c.label,
+        el("span", { class: "arrows", "aria-hidden": "true" },
+          el("span", { class: active && sort.dir === "asc" ? "on" : "" }, "▲"),
+          el("span", { class: active && sort.dir === "desc" ? "on" : "" }, "▼"))));
+    if (active) th.setAttribute("aria-sort", sort.dir === "asc" ? "ascending" : "descending");
+    return th;
+  }));
+}
+
+function setSort(key) {
+  // Same column flips direction. A new column starts with the most useful order:
+  // dates and numbers high-to-low, except pace, where fastest (lowest) comes first.
+  if (sort.key === key) sort.dir = sort.dir === "asc" ? "desc" : "asc";
+  else sort = { key, dir: key === "pace" ? "asc" : "desc" };
+  render();
+}
+
+function render() {
+  renderHead();
+  const rows = document.getElementById("rows");
+  rows.replaceChildren(...sortedRuns().map((r) => {
+    const open = () => (location.href = `/runs/${r.id}`);
+    return el("tr", { class: "link", tabindex: "0", onclick: open,
+                      onkeydown: (e) => { if (e.key === "Enter") open(); } },
+      COLUMNS.map((c) => el("td", { class: c.num ? "r" : "" }, c.show(r))));
+  }));
+}
+
+(async function () {
+  const rows = document.getElementById("rows");
+  const summary = document.getElementById("summary");
+  renderHead();
+  try {
+    runs = await getJSON("/api/runs?limit=1000");
+    if (!runs.length) {
+      rows.append(el("tr", {}, el("td", { colspan: COLUMNS.length, class: "empty" },
+        "No runs yet. Import a Samsung Health export to see them here.")));
+      summary.textContent = "";
+      return;
+    }
+    const matched = runs.filter((r) => r.whoop).length;
+    const miles = runs.reduce((s, r) => s + (r.distance_mi || 0), 0);
+    summary.textContent = `${runs.length} runs · ${miles.toFixed(0)} miles · ${matched} matched to WHOOP`;
+    render();
+  } catch (err) {
+    summary.textContent = "";
+    rows.append(el("tr", {}, el("td", { colspan: COLUMNS.length, class: "empty error" }, `Couldn't load runs: ${err.message}`)));
+  }
+})();
+</script>
+</body>
+</html>

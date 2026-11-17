@@ -7,9 +7,11 @@ import asyncio
 import html
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 
 from app.config import get_settings
@@ -18,6 +20,7 @@ from app.models import (
     RunMatch,
     SamsungRoutePoint,
     SamsungRun,
+    SamsungSample,
     SamsungSplit,
     SyncState,
     WhoopCycle,
@@ -92,12 +95,28 @@ def index() -> str:
 <style>body{{font-family:system-ui;max-width:860px;margin:2rem auto;padding:0 1rem}}
 table{{border-collapse:collapse;margin:1rem 0}}td,th{{border:1px solid #ccc;padding:4px 10px;text-align:left}}
 .warn{{color:#b45309}}.btn,button{{display:inline-block;padding:6px 14px;margin:4px 0}}form{{display:inline-block;margin-right:8px}}</style>
-</head><body><h1>Training Platform</h1>{action}
+</head><body><h1>Training Platform</h1><p><a href=/runs><b>View runs →</b></a></p>{action}
 <h2>Stored records</h2><table>{count_rows}</table>
 <h2>Sync status (UTC)</h2><table><tr><th>Resource</th><th>Last success</th><th>Records last run</th><th>Last error</th></tr>{state_rows}</table>
 <p>JSON: <a href=/api/runs>/api/runs</a> · <a href=/api/workouts>/api/workouts</a> · <a href=/api/recovery>/api/recovery</a> ·
 <a href=/api/sleep>/api/sleep</a> · <a href=/api/cycles>/api/cycles</a> · <a href=/docs>/docs</a></p>
 </body></html>"""
+
+
+# ---------- web pages (static HTML that reads the JSON API) ----------
+
+WEB_DIR = Path(__file__).parent / "web"
+app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+
+
+@app.get("/runs", include_in_schema=False)
+def runs_page() -> FileResponse:
+    return FileResponse(WEB_DIR / "runs.html")
+
+
+@app.get("/runs/{run_id}", include_in_schema=False)
+def run_page(run_id: str) -> FileResponse:
+    return FileResponse(WEB_DIR / "run.html")
 
 
 # ---------- WHOOP auth ----------
@@ -244,6 +263,20 @@ def get_run(run_id: str, route: bool = True) -> dict:
             ]
             data["route_columns"] = ["latitude", "longitude", "altitude_m", "elapsed_ms", "split_index"]
     return data
+
+
+@app.get("/api/runs/{run_id}/samples")
+def get_run_samples(run_id: str) -> dict:
+    """Samsung's per-second readings for one run, as compact rows (for the pace chart)."""
+    with SessionLocal() as s:
+        if s.get(SamsungRun, run_id) is None:
+            raise HTTPException(404, "Run not found")
+        rows = s.execute(
+            select(SamsungSample.elapsed_ms, SamsungSample.distance_m, SamsungSample.speed_mps)
+            .where(SamsungSample.run_id == run_id)
+            .order_by(SamsungSample.seq)
+        ).all()
+    return {"columns": ["elapsed_ms", "distance_m", "speed_mps"], "rows": [list(r) for r in rows]}
 
 
 @app.get("/api/recovery")
