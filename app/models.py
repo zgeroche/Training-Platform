@@ -114,6 +114,79 @@ class WhoopSleep(Base):
     raw: Mapped[dict[str, Any]]
 
 
+class SamsungRun(Base):
+    """A run recorded on the Galaxy Watch. Source of truth for time, duration, distance, route and splits.
+
+    Samsung heart-rate data is deliberately not stored; WHOOP is the HR source.
+    """
+
+    __tablename__ = "samsung_run"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # Samsung datauuid
+    exercise_type: Mapped[int]
+    start: Mapped[datetime] = mapped_column(index=True)  # when Start was pressed
+    end: Mapped[datetime | None]  # when Stop was pressed
+    timezone_offset: Mapped[str | None]  # e.g. "UTC-0700"
+    duration_ms: Mapped[int | None]  # active time, pauses excluded: THE run duration everywhere in the app
+    distance_m: Mapped[float | None]
+    mean_speed_mps: Mapped[float | None]
+    max_speed_mps: Mapped[float | None]
+    mean_cadence: Mapped[float | None]
+    max_cadence: Mapped[float | None]
+    altitude_gain_m: Mapped[float | None]
+    altitude_loss_m: Mapped[float | None]
+    min_altitude_m: Mapped[float | None]
+    max_altitude_m: Mapped[float | None]
+    vo2_max: Mapped[float | None]
+    has_route: Mapped[bool] = mapped_column(Boolean, default=False)
+    route_point_count: Mapped[int] = mapped_column(Integer, default=0)
+    split_count: Mapped[int] = mapped_column(Integer, default=0)
+    imported_at: Mapped[datetime]
+    raw: Mapped[dict[str, Any]]  # summary CSV row, heart-rate columns removed
+
+
+class SamsungRoutePoint(Base):
+    __tablename__ = "samsung_route_point"
+
+    run_id: Mapped[str] = mapped_column(String, primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ts: Mapped[datetime]
+    elapsed_ms: Mapped[int | None]  # active time since start (pauses excluded)
+    split_index: Mapped[int | None]  # 1-based mile this point falls in
+    latitude: Mapped[float]
+    longitude: Mapped[float]
+    altitude_m: Mapped[float | None]
+    accuracy_m: Mapped[float | None]
+
+
+class SamsungSplit(Base):
+    """One auto-lap from the watch: a full mile, or the partial remainder at the end."""
+
+    __tablename__ = "samsung_split"
+
+    run_id: Mapped[str] = mapped_column(String, primary_key=True)
+    split_index: Mapped[int] = mapped_column(Integer, primary_key=True)  # 1-based
+    distance_m: Mapped[float]
+    duration_ms: Mapped[int]  # active time for this split
+    start_elapsed_ms: Mapped[int]
+    end_elapsed_ms: Mapped[int]
+    is_partial: Mapped[bool] = mapped_column(Boolean)
+
+
+class RunMatch(Base):
+    """Links a Samsung run to the WHOOP workout recorded for it. Rebuilt by app.matching."""
+
+    __tablename__ = "run_match"
+
+    samsung_run_id: Mapped[str] = mapped_column(String, primary_key=True)
+    whoop_workout_id: Mapped[str] = mapped_column(String, unique=True)
+    overlap_seconds: Mapped[float]
+    overlap_fraction: Mapped[float]  # share of the Samsung run covered by the WHOOP workout
+    start_diff_seconds: Mapped[float]  # WHOOP start minus Samsung start (positive = WHOOP started late)
+    whoop_sport_name: Mapped[str | None]
+    matched_at: Mapped[datetime]
+
+
 class WhoopWorkout(Base):
     __tablename__ = "whoop_workout"
 

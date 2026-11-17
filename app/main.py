@@ -14,7 +14,17 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.db import SessionLocal, init_db
-from app.models import SyncState, WhoopCycle, WhoopRecovery, WhoopSleep, WhoopWorkout
+from app.models import (
+    RunMatch,
+    SamsungRoutePoint,
+    SamsungRun,
+    SamsungSplit,
+    SyncState,
+    WhoopCycle,
+    WhoopRecovery,
+    WhoopSleep,
+    WhoopWorkout,
+)
 from app.whoop import auth
 from app.whoop.sync import sync_all
 
@@ -56,6 +66,8 @@ def index() -> str:
             "Sleeps": s.scalar(select(func.count()).select_from(WhoopSleep)),
             "Recoveries": s.scalar(select(func.count()).select_from(WhoopRecovery)),
             "Cycles": s.scalar(select(func.count()).select_from(WhoopCycle)),
+            "Samsung runs": s.scalar(select(func.count()).select_from(SamsungRun)),
+            "Runs matched to WHOOP": s.scalar(select(func.count()).select_from(RunMatch)),
         }
         states = s.scalars(select(SyncState).order_by(SyncState.resource)).all()
 
@@ -83,7 +95,7 @@ table{{border-collapse:collapse;margin:1rem 0}}td,th{{border:1px solid #ccc;padd
 </head><body><h1>Training Platform</h1>{action}
 <h2>Stored records</h2><table>{count_rows}</table>
 <h2>Sync status (UTC)</h2><table><tr><th>Resource</th><th>Last success</th><th>Records last run</th><th>Last error</th></tr>{state_rows}</table>
-<p>JSON: <a href=/api/workouts>/api/workouts</a> · <a href=/api/recovery>/api/recovery</a> ·
+<p>JSON: <a href=/api/runs>/api/runs</a> · <a href=/api/workouts>/api/workouts</a> · <a href=/api/recovery>/api/recovery</a> ·
 <a href=/api/sleep>/api/sleep</a> · <a href=/api/cycles>/api/cycles</a> · <a href=/docs>/docs</a></p>
 </body></html>"""
 
@@ -148,6 +160,90 @@ def list_workouts(limit: int = Query(50, le=1000), sport: str | None = None) -> 
         objs = s.scalars(q).all()
     cols = [c.name for c in WhoopWorkout.__table__.columns if c.name != "raw"]
     return [{c: getattr(o, c) for c in cols} for o in objs]
+
+
+MILE_M = 1609.344
+WHOOP_RUN_FIELDS = (
+    "sport_name", "strain", "average_heart_rate", "max_heart_rate", "kilojoule",
+    "zone_zero_milli", "zone_one_milli", "zone_two_milli", "zone_three_milli", "zone_four_milli", "zone_five_milli",
+)
+
+
+def _merged_run(run: SamsungRun, match: RunMatch | None, workout: WhoopWorkout | None) -> dict:
+    """Best of both: time/duration/distance/route from Samsung, heart rate and strain from WHOOP."""
+    pace = None
+    if run.duration_ms and run.distance_m:
+        pace = run.duration_ms / 1000 / (run.distance_m / MILE_M)
+    return {
+        "id": run.id,
+        "start": run.start,
+        "timezone_offset": run.timezone_offset,
+        "duration_ms": run.duration_ms,  # Samsung active time: the run's duration
+        "distance_m": run.distance_m,
+        "distance_mi": run.distance_m / MILE_M if run.distance_m else None,
+        "pace_sec_per_mile": pace,
+        "altitude_gain_m": run.altitude_gain_m,
+        "mean_cadence": run.mean_cadence,
+        "has_route": run.has_route,
+        "split_count": run.split_count,
+        "whoop": None
+        if workout is None
+        else {
+            "workout_id": workout.id,
+            "start_diff_seconds": match.start_diff_seconds,
+            "overlap_fraction": match.overlap_fraction,
+            **{f: getattr(workout, f) for f in WHOOP_RUN_FIELDS},
+        },
+    }
+
+
+def _run_query():
+    return (
+        select(SamsungRun, RunMatch, WhoopWorkout)
+        .outerjoin(RunMatch, RunMatch.samsung_run_id == SamsungRun.id)
+        .outerjoin(WhoopWorkout, WhoopWorkout.id == RunMatch.whoop_workout_id)
+    )
+
+
+@app.get("/api/runs")
+def list_runs(limit: int = Query(50, le=1000), matched: bool | None = None) -> list[dict]:
+    q = _run_query().order_by(SamsungRun.start.desc()).limit(limit)
+    if matched is True:
+        q = q.where(RunMatch.samsung_run_id.is_not(None))
+    elif matched is False:
+        q = q.where(RunMatch.samsung_run_id.is_(None))
+    with SessionLocal() as s:
+        return [_merged_run(*row) for row in s.execute(q).all()]
+
+
+@app.get("/api/runs/{run_id}")
+def get_run(run_id: str, route: bool = True) -> dict:
+    with SessionLocal() as s:
+        row = s.execute(_run_query().where(SamsungRun.id == run_id)).first()
+        if row is None:
+            raise HTTPException(404, "Run not found")
+        data = _merged_run(*row)
+        data["splits"] = [
+            {
+                "split_index": sp.split_index,
+                "distance_m": sp.distance_m,
+                "duration_ms": sp.duration_ms,
+                "pace_sec_per_mile": sp.duration_ms / 1000 / (sp.distance_m / MILE_M) if sp.distance_m else None,
+                "is_partial": sp.is_partial,
+            }
+            for sp in s.scalars(
+                select(SamsungSplit).where(SamsungSplit.run_id == run_id).order_by(SamsungSplit.split_index)
+            )
+        ]
+        if route:
+            data["route"] = [
+                [p.latitude, p.longitude, p.altitude_m, p.elapsed_ms, p.split_index]
+                for p in s.scalars(
+                    select(SamsungRoutePoint).where(SamsungRoutePoint.run_id == run_id).order_by(SamsungRoutePoint.seq)
+                )
+            ]
+            data["route_columns"] = ["latitude", "longitude", "altitude_m", "elapsed_ms", "split_index"]
+    return data
 
 
 @app.get("/api/recovery")

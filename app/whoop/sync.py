@@ -13,6 +13,7 @@ from datetime import timedelta
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.matching import rebuild_matches
 from app.db import SessionLocal, init_db, parse_ts, utcnow
 from app.models import SyncState, WhoopCycle, WhoopRecovery, WhoopSleep, WhoopUser, WhoopWorkout
 from app.whoop.client import WhoopClient
@@ -201,6 +202,13 @@ def sync_all() -> dict[str, int | str]:
                 state.records_last_run = count
                 session.merge(state)
                 session.commit()
+
+            try:
+                results["run_matches"] = rebuild_matches(session).matched
+            except Exception as exc:
+                session.rollback()
+                log.exception("Run matching failed after WHOOP sync")
+                results["run_matches"] = f"error: {exc}"
         log.info("WHOOP sync finished: %s", results)
         return results
     finally:
