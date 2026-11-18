@@ -12,6 +12,12 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///data/training.db"
 
+    # Secret the phone app sends (X-API-Key header) to upload runs. Empty = uploads disabled.
+    ingest_api_key: str = ""
+
+    # Time zone for times shown in the app (IANA name). America/Denver = Mountain Time.
+    local_timezone: str = "America/Denver"
+
     sync_interval_minutes: int = 20
     whoop_backfill_days: int = 0  # 0 = all available history
 

@@ -5,12 +5,15 @@ Run with:  uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 import asyncio
 import html
+import ipaddress
 import logging
 from contextlib import asynccontextmanager
+import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 
@@ -28,6 +31,9 @@ from app.models import (
     WhoopSleep,
     WhoopWorkout,
 )
+from app.matching import RUN_SPORTS, rebuild_matches
+from app.samsung.ingest import RunUpload, ingest_run
+from app.timefmt import ago, fmt_local
 from app.whoop import auth
 from app.whoop.sync import sync_all
 
@@ -56,6 +62,27 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Training Platform", lifespan=lifespan)
 
+# The server listens on the home network so the phone can upload runs. Other devices on the
+# network may only reach the (key-protected) upload API; pages, run data and WHOOP controls
+# stay limited to this PC.
+LAN_ALLOWED_PREFIXES = ("/api/samsung/",)
+
+
+def _is_this_pc(host: str | None) -> bool:
+    try:
+        return host is not None and ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+@app.middleware("http")
+async def only_uploads_from_other_devices(request: Request, call_next):
+    if not _is_this_pc(request.client.host if request.client else None) and not request.url.path.startswith(
+        LAN_ALLOWED_PREFIXES
+    ):
+        return PlainTextResponse("Only available on the PC running the server.", status_code=403)
+    return await call_next(request)
+
 
 # ---------- status page ----------
 
@@ -73,6 +100,16 @@ def index() -> str:
             "Runs matched to WHOOP": s.scalar(select(func.count()).select_from(RunMatch)),
         }
         states = s.scalars(select(SyncState).order_by(SyncState.resource)).all()
+        newest_run, last_import = s.execute(select(func.max(SamsungRun.start), func.max(SamsungRun.imported_at))).one()
+        # Unmatched WHOOP runs since the newest Samsung run: recorded, but not on the Runs page yet.
+        # (WHOOP often starts a minute after the Samsung run, so "after the newest run" alone isn't enough.)
+        waiting = s.scalars(
+            select(WhoopWorkout)
+            .where(WhoopWorkout.sport_name.in_(RUN_SPORTS))
+            .where(WhoopWorkout.start >= (newest_run or datetime.min) - timedelta(hours=1))
+            .where(WhoopWorkout.id.not_in(select(RunMatch.whoop_workout_id)))
+            .order_by(WhoopWorkout.start)
+        ).all()
 
     if not settings.whoop_configured:
         action = "<p class=warn>Set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET in <code>.env</code>, then restart.</p>"
@@ -86,18 +123,56 @@ def index() -> str:
         action = "<p>WHOOP: not connected</p><a class=btn href=/auth/whoop/login>Connect WHOOP</a>"
 
     count_rows = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in counts.items())
-    state_rows = "".join(
-        f"<tr><td>{st.resource}</td><td>{st.last_success_at or '-'}</td>"
-        f"<td>{st.records_last_run}</td><td>{html.escape(st.last_error or '')}</td></tr>"
-        for st in states
-    )
+
+    # WHOOP: one line for the whole sync (all four data types run together).
+    if not states:
+        whoop_status = "<p>WHOOP has not synced yet.</p>"
+    else:
+        successes = [st.last_success_at for st in states]
+        last_ok = min(successes) if all(successes) else None
+        last_try = max(st.last_attempt_at for st in states if st.last_attempt_at)
+        next_sync = last_try + timedelta(minutes=max(settings.sync_interval_minutes, 5))
+        whoop_status = (
+            f"<p><b>WHOOP</b>: last synced {fmt_local(last_ok)} ({ago(last_ok)}). "
+            f"Next automatic sync around {fmt_local(next_sync, date=False)}.</p>"
+            if last_ok
+            else "<p><b>WHOOP</b>: no complete sync yet.</p>"
+        )
+        errors = [st for st in states if st.last_error]
+        if errors:
+            whoop_status += "<p class=warn>The last sync had a problem: " + "; ".join(
+                f"{html.escape(st.resource.removeprefix('whoop.'))}: {html.escape(st.last_error[:200])}" for st in errors
+            ) + "</p>"
+
+    # Samsung: imported by hand from an export, so say so and show what's missing.
+    if newest_run is None:
+        samsung_status = "<p><b>Samsung</b>: no runs imported yet.</p>"
+    else:
+        samsung_status = (
+            f"<p><b>Samsung</b>: newest run {fmt_local(newest_run)}. "
+            f"Last imported {fmt_local(last_import)} ({ago(last_import)}). "
+            "Runs come from a Samsung Health export you import by hand; there's no automatic Samsung sync yet.</p>"
+        )
+    if waiting:
+        items = "".join(
+            f"<li>{fmt_local(w.start)} · strain {w.strain:.1f}</li>" if w.strain is not None
+            else f"<li>{fmt_local(w.start)}</li>"
+            for w in waiting
+        )
+        samsung_status += (
+            f"<div class=waiting><b>Waiting for Samsung data:</b> WHOOP recorded "
+            f"{len(waiting)} run{'s' if len(waiting) != 1 else ''} that "
+            f"{'aren' if len(waiting) != 1 else 'isn'}'t on the Runs page yet. "
+            f"{'They' if len(waiting) != 1 else 'It'}'ll appear after the next Samsung import.<ul>{items}</ul></div>"
+        )
     return f"""<!doctype html><html><head><meta charset=utf-8><title>Training Platform</title>
 <style>body{{font-family:system-ui;max-width:860px;margin:2rem auto;padding:0 1rem}}
 table{{border-collapse:collapse;margin:1rem 0}}td,th{{border:1px solid #ccc;padding:4px 10px;text-align:left}}
-.warn{{color:#b45309}}.btn,button{{display:inline-block;padding:6px 14px;margin:4px 0}}form{{display:inline-block;margin-right:8px}}</style>
+.warn{{color:#b45309}}.btn,button{{display:inline-block;padding:6px 14px;margin:4px 0}}form{{display:inline-block;margin-right:8px}}
+.waiting{{border-left:3px solid #b45309;padding:4px 12px;margin:8px 0}}.waiting ul{{margin:4px 0}}</style>
 </head><body><h1>Training Platform</h1><p><a href=/runs><b>View runs →</b></a></p>{action}
+<h2>Sync status</h2>{whoop_status}{samsung_status}
 <h2>Stored records</h2><table>{count_rows}</table>
-<h2>Sync status (UTC)</h2><table><tr><th>Resource</th><th>Last success</th><th>Records last run</th><th>Last error</th></tr>{state_rows}</table>
 <p>JSON: <a href=/api/runs>/api/runs</a> · <a href=/api/workouts>/api/workouts</a> · <a href=/api/recovery>/api/recovery</a> ·
 <a href=/api/sleep>/api/sleep</a> · <a href=/api/cycles>/api/cycles</a> · <a href=/docs>/docs</a></p>
 </body></html>"""
@@ -277,6 +352,34 @@ def get_run_samples(run_id: str) -> dict:
             .order_by(SamsungSample.seq)
         ).all()
     return {"columns": ["elapsed_ms", "distance_m", "speed_mps"], "rows": [list(r) for r in rows]}
+
+
+# ---------- phone uploads ----------
+
+def require_ingest_key(x_api_key: str | None = Header(default=None)) -> None:
+    expected = get_settings().ingest_api_key
+    if not expected:
+        raise HTTPException(503, "Uploads are turned off: set INGEST_API_KEY in .env and restart the server.")
+    if not x_api_key or not secrets.compare_digest(x_api_key, expected):
+        raise HTTPException(401, "Missing or wrong X-API-Key")
+
+
+@app.post("/api/samsung/runs", dependencies=[Depends(require_ingest_key)])
+def upload_runs(runs: list[RunUpload]) -> dict:
+    """Store runs sent by the phone app (replaces a run with the same id), then re-match WHOOP."""
+    with SessionLocal() as s:
+        results = [ingest_run(s, up) for up in runs]
+        s.commit()
+        matched = rebuild_matches(s).matched
+    return {"results": results, "runs_matched_to_whoop": matched}
+
+
+@app.get("/api/samsung/latest", dependencies=[Depends(require_ingest_key)])
+def latest_samsung_run() -> dict:
+    """Newest stored run start (epoch ms), so the phone knows where to resume."""
+    with SessionLocal() as s:
+        newest = s.scalar(select(func.max(SamsungRun.start)))
+    return {"latest_start": int(newest.replace(tzinfo=timezone.utc).timestamp() * 1000) if newest else None}
 
 
 @app.get("/api/recovery")

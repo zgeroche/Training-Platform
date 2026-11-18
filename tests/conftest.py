@@ -7,6 +7,7 @@ _tmp = Path(tempfile.mkdtemp()) / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.as_posix()}"
 os.environ["WHOOP_CLIENT_ID"] = "test-client"
 os.environ["WHOOP_CLIENT_SECRET"] = "test-secret"
+os.environ["INGEST_API_KEY"] = "test-upload-key"
 
 import pytest  # noqa: E402
 

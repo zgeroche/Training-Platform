@@ -1,0 +1,5 @@
+/build
+
+# Samsung Health Data SDK library: Samsung's license doesn't clearly allow redistributing it,
+# so it stays out of Git. Copy it in from the SDK download (see android/README.md).
+/libs/*.aar

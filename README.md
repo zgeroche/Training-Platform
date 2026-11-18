@@ -36,7 +36,7 @@ tests/
    ```
 4. **Run the server:**
    ```powershell
-   .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+   .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
 5. Open http://localhost:8000 and click **Connect WHOOP**. After you approve, the first sync pulls your full history
    (set `WHOOP_BACKFILL_DAYS` to limit it). After that the server re-syncs every `SYNC_INTERVAL_MINUTES`.
@@ -59,4 +59,9 @@ Run the tests with `.\.venv\Scripts\python.exe -m pytest`.
 
 ## Security
 
-- The server binds to `127.0.0.1` only. `.env` (client secret) and `data/` (tokens, health data) are git-ignored.
+- The server listens on the home network (`0.0.0.0:8000`) so the phone app can upload runs.
+  Other devices can only reach `/api/samsung/...`, which needs the `INGEST_API_KEY` from `.env`;
+  every page, run, and WHOOP control is limited to the PC itself.
+- Windows Firewall needs one inbound rule for TCP 8000 on Private networks (run in an admin PowerShell):
+  `New-NetFirewallRule -DisplayName "Training Platform (phone uploads)" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private`
+- `.env` (secrets) and `data/` (tokens, health data) are git-ignored.

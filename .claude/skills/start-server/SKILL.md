@@ -15,12 +15,14 @@ disable-model-invocation: true
 
 3. **Start it in a Terminal panel tab** so the user can watch the logs and stop it with Ctrl-C.
    Use `mcp__terminal__run_in_terminal` (load it with ToolSearch if it is deferred) with:
-   - command: `& '.\.venv\Scripts\python.exe' -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
+   - command: `& '.\.venv\Scripts\python.exe' -m uvicorn app.main:app --host 0.0.0.0 --port 8000`
+     (listens on the home network so the phone app can upload runs; other devices can only reach
+     the key-protected `/api/samsung/` upload API, everything else is limited to this PC)
    - cwd: the project root (absolute path)
    - title: `server`
 
 4. **Confirm it came up.** Read the tab with `mcp__terminal__read_terminal` (`wait_for_output_ms` about 5000).
-   - If it shows `Uvicorn running on http://127.0.0.1:8000`, it worked.
+   - If it shows `Uvicorn running on http://0.0.0.0:8000`, it worked.
    - If it shows an error (for example a traceback, or the port already in use), report the relevant lines.
 
 5. **Report briefly.** Say that the server is running, link the tab as `[server](#terminal/<tab_id>)`, and give the status page, http://localhost:8000.

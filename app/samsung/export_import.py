@@ -19,12 +19,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, insert
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, init_db, utcnow
 from app.matching import rebuild_matches
-from app.models import SamsungRoutePoint, SamsungRun, SamsungSample, SamsungSplit
+from app.models import SamsungRun
+from app.samsung.store import MILE_M, PARTIAL_THRESHOLD, rejection_reason, remove_run, save_run
 
 log = logging.getLogger(__name__)
 
@@ -32,15 +32,6 @@ P = "com.samsung.health.exercise."
 RUN_TYPES = {1002}  # Samsung exercise_type for running
 SUMMARY_CSV_GLOB = "com.samsung.shealth.exercise.[0-9]*.csv"
 JSON_DIR = Path("jsons") / "com.samsung.shealth.exercise"
-MILE_M = 1609.344
-PARTIAL_THRESHOLD = 0.98  # a split shorter than 98% of a mile is the partial remainder
-# Accidental Start presses: in the real export these were all <= 17 m, and the shortest
-# real run was over 400 m, so 100 m separates them cleanly.
-MIN_RUN_DISTANCE_M = 100.0
-# Recording glitches: an average pace faster than 4:00/mi (about world-record mile pace)
-# can't be a real run. The one glitch in the real export averaged 0:57/mi; the fastest
-# real run averaged 7:35/mi.
-MIN_PACE_SEC_PER_MILE = 240.0
 
 
 @dataclass
@@ -203,25 +194,6 @@ def build_route(location: list[dict], location_internal: list[dict] | None) -> l
 
 # ---------- import ----------
 
-CHILD_TABLES = (SamsungSplit, SamsungRoutePoint, SamsungSample)
-
-
-def _replace_children(
-    session: Session, run_id: str, splits: list[dict], route: list[dict], samples: list[dict]
-) -> None:
-    for model in CHILD_TABLES:
-        session.execute(delete(model).where(model.run_id == run_id))
-    for model, rows in ((SamsungSplit, splits), (SamsungRoutePoint, route), (SamsungSample, samples)):
-        if rows:
-            session.execute(insert(model), [{"run_id": run_id, **r} for r in rows])
-
-
-def _remove_run(session: Session, run_id: str) -> None:
-    for model in CHILD_TABLES:
-        session.execute(delete(model).where(model.run_id == run_id))
-    session.execute(delete(SamsungRun).where(SamsungRun.id == run_id))
-
-
 def import_rows(session: Session, rows: Iterable[dict[str, str]], index: dict[str, Path]) -> ImportResult:
     result = ImportResult()
     for row in rows:
@@ -233,18 +205,12 @@ def import_rows(session: Session, rows: Iterable[dict[str, str]], index: dict[st
             result.skipped.append(run_id or "<no id>")
             continue
 
-        distance_m = _f(row.get(P + "distance")) or 0.0
         duration_ms = _i(row.get(P + "duration"))
-        too_short = distance_m < MIN_RUN_DISTANCE_M
-        too_fast = (
-            not too_short
-            and bool(duration_ms)
-            and (duration_ms / 1000) / (distance_m / MILE_M) < MIN_PACE_SEC_PER_MILE
-        )
-        if too_short or too_fast:
+        reason = rejection_reason(_f(row.get(P + "distance")), duration_ms)
+        if reason:
             # Also remove it if an earlier import (before these rules existed) stored it.
-            _remove_run(session, run_id)
-            if too_short:
+            remove_run(session, run_id)
+            if reason == "accidental":
                 result.accidental += 1
             else:
                 result.implausible += 1
@@ -259,7 +225,8 @@ def import_rows(session: Session, rows: Iterable[dict[str, str]], index: dict[st
         route = build_route(location, location_internal)
         samples = build_samples(live, live_internal)
 
-        session.merge(
+        save_run(
+            session,
             SamsungRun(
                 id=run_id,
                 exercise_type=_i(row.get(P + "exercise_type")),
@@ -277,15 +244,13 @@ def import_rows(session: Session, rows: Iterable[dict[str, str]], index: dict[st
                 min_altitude_m=_f(row.get(P + "min_altitude")),
                 max_altitude_m=_f(row.get(P + "max_altitude")),
                 vo2_max=_f(row.get(P + "vo2_max")),
-                has_route=bool(route),
-                route_point_count=len(route),
-                split_count=len(splits),
                 imported_at=utcnow(),
                 raw=_strip_heart_rate(row),
-            )
+            ),
+            splits,
+            route,
+            samples,
         )
-        session.flush()
-        _replace_children(session, run_id, splits, route, samples)
 
         result.runs += 1
         result.with_route += bool(route)
