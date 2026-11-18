@@ -7,14 +7,16 @@ the route's split numbers, then stores the run exactly like an exported one.
 Samsung heart rate is never accepted: the upload format has no field for it.
 """
 
+import math
 from bisect import bisect_right
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import SamsungRun
+from app.models import SamsungRoutePoint, SamsungRun, SamsungSample, SamsungSplit
 from app.samsung.store import MILE_M, PARTIAL_THRESHOLD, rejection_reason, remove_run, save_run
 
 RUNNING = 1002  # Samsung exercise type
@@ -122,6 +124,37 @@ def splits_from_distance(points: list[tuple[int, float]], duration_ms: int | Non
     return splits
 
 
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6_371_008.8
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
+
+
+def gps_distance_points(route: list[dict], total_distance_m: float | None) -> list[tuple[int, float]]:
+    """(active elapsed ms, cumulative distance) along the GPS route, scaled to Samsung's total distance.
+
+    Why GPS and not the speed readings: summing speed x time lags behind the watch's own distance,
+    putting mile markers ~10 s off Samsung's laps. Checked against Samsung's real laps on 61 exported
+    2026 runs, scaled GPS distance lands a median 2.4 s (90th percentile 8 s) from them.
+    """
+    pts: list[tuple[int, float]] = []
+    d = 0.0
+    prev = None
+    for p in route:
+        if p["elapsed_ms"] is None:
+            continue
+        if prev is not None:
+            d += _haversine_m(prev["latitude"], prev["longitude"], p["latitude"], p["longitude"])
+        pts.append((p["elapsed_ms"], d))
+        prev = p
+    if len(pts) < 2 or d <= 0:
+        return []
+    k = (total_distance_m / d) if total_distance_m else 1.0
+    return [(e, dist * k) for e, dist in pts]
+
+
 def _split_of(elapsed: int | None, splits: list[dict]) -> int | None:
     if elapsed is None or not splits:
         return None
@@ -150,15 +183,20 @@ def build_from_upload(up: RunUpload) -> tuple[SamsungRun, list[dict], list[dict]
     for seq, s in enumerate(samples):
         s["seq"] = seq
 
-    splits = splits_from_distance([(s["elapsed_ms"], s["distance_m"]) for s in samples],
-                                  up.duration_ms, up.distance_m)
-
     route = []
     for p in sorted(up.route, key=lambda p: p.t):
-        elapsed = elapsed_at(p.t, up.start, pauses)
-        route.append({"seq": len(route), "ts": _utc(p.t), "elapsed_ms": elapsed,
-                      "split_index": _split_of(elapsed, splits), "latitude": p.lat, "longitude": p.lon,
+        route.append({"seq": len(route), "ts": _utc(p.t), "elapsed_ms": elapsed_at(p.t, up.start, pauses),
+                      "split_index": None, "latitude": p.lat, "longitude": p.lon,
                       "altitude_m": p.alt, "accuracy_m": p.acc})
+
+    # Mile splits: from the GPS route when there is one (closest to Samsung's own laps),
+    # otherwise (treadmill/indoor) from the distance added up from speed readings.
+    distance_curve = gps_distance_points(route, up.distance_m) or [
+        (s["elapsed_ms"], s["distance_m"]) for s in samples
+    ]
+    splits = splits_from_distance(distance_curve, up.duration_ms, up.distance_m)
+    for p in route:
+        p["split_index"] = _split_of(p["elapsed_ms"], splits)
 
     run = SamsungRun(
         id=up.id, exercise_type=up.exercise_type, start=_utc(up.start),
@@ -174,6 +212,37 @@ def build_from_upload(up: RunUpload) -> tuple[SamsungRun, list[dict], list[dict]
     return run, splits, route, samples
 
 
+def recompute_phone_splits(session: Session) -> int:
+    """Rebuild splits for every phone-uploaded run from its stored route/samples (after a method change).
+
+    Exported runs are left alone: they carry Samsung's own laps. Returns the number of runs rebuilt.
+    Caller commits.
+    """
+    runs = session.scalars(select(SamsungRun)).all()
+    count = 0
+    for run in runs:
+        if (run.raw or {}).get("source") != "phone":
+            continue
+        route_rows = session.scalars(
+            select(SamsungRoutePoint).where(SamsungRoutePoint.run_id == run.id).order_by(SamsungRoutePoint.seq)
+        ).all()
+        route = [{"elapsed_ms": p.elapsed_ms, "latitude": p.latitude, "longitude": p.longitude} for p in route_rows]
+        samples = session.execute(
+            select(SamsungSample.elapsed_ms, SamsungSample.distance_m)
+            .where(SamsungSample.run_id == run.id).order_by(SamsungSample.seq)
+        ).all()
+        curve = gps_distance_points(route, run.distance_m) or [(e, d) for e, d in samples]
+        splits = splits_from_distance(curve, run.duration_ms, run.distance_m)
+        session.execute(delete(SamsungSplit).where(SamsungSplit.run_id == run.id))
+        if splits:
+            session.execute(insert(SamsungSplit), [{"run_id": run.id, **sp} for sp in splits])
+        for p in route_rows:
+            p.split_index = _split_of(p.elapsed_ms, splits)
+        run.split_count = len(splits)
+        count += 1
+    return count
+
+
 def ingest_run(session: Session, up: RunUpload) -> dict:
     """Store (or replace) one uploaded run. Returns a short status for the phone. Caller commits."""
     if up.exercise_type != RUNNING:
@@ -186,3 +255,18 @@ def ingest_run(session: Session, up: RunUpload) -> dict:
     save_run(session, run, splits, route, samples)
     return {"id": up.id, "status": "stored", "splits": len(splits), "route_points": len(route),
             "samples": len(samples)}
+
+
+if __name__ == "__main__":
+    # python -m app.samsung.ingest --recompute-splits
+    import sys
+
+    from app.db import SessionLocal, init_db
+
+    if sys.argv[1:] != ["--recompute-splits"]:
+        sys.exit("Usage: python -m app.samsung.ingest --recompute-splits")
+    init_db()
+    with SessionLocal() as s:
+        n = recompute_phone_splits(s)
+        s.commit()
+    print(f"Rebuilt splits for {n} phone-uploaded run(s).")

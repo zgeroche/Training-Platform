@@ -111,6 +111,42 @@ def test_other_devices_only_reach_the_upload_api():
     assert local.get("/api/runs").status_code == 200
 
 
+def _splits(run_id):
+    with SessionLocal() as s:
+        return s.query(SamsungSplit).filter_by(run_id=run_id).order_by(SamsungSplit.split_index).all()
+
+
+def test_splits_follow_gps_when_speed_readings_lag():
+    # Speed-derived distance runs 60 m behind the truth; the GPS route doesn't.
+    payload = _run_payload("lag", pauses=[])
+    for k, smp in enumerate(payload["samples"]):
+        smp["t"] = T0 + k * 1000
+        smp["distance_m"] = max(0.0, k * SPEED - 60)
+    for k, pt in enumerate(payload["route"]):
+        pt["t"] = T0 + k * 1000
+    client.post("/api/samsung/runs", json=[payload], headers=KEY)
+    mile_ms = MILE_M / SPEED * 1000
+    assert abs(_splits("lag")[0].duration_ms - mile_ms) < 1500  # lagging speed would give ~+20 s
+
+
+def test_splits_fall_back_to_speed_without_gps():
+    client.post("/api/samsung/runs", json=[_run_payload("treadmill", route=[])], headers=KEY)
+    splits = _splits("treadmill")
+    assert [sp.is_partial for sp in splits] == [False, False, True]
+
+
+def test_recompute_rebuilds_phone_run_splits():
+    from app.samsung.ingest import recompute_phone_splits
+
+    client.post("/api/samsung/runs", json=[_run_payload()], headers=KEY)
+    with SessionLocal() as s:  # simulate splits stored by an older method
+        s.query(SamsungSplit).filter_by(run_id="run-1").delete()
+        s.commit()
+        assert recompute_phone_splits(s) == 1
+        s.commit()
+    assert len(_splits("run-1")) == 3
+
+
 def test_splits_interpolate_the_mile_crossing():
     # 0 m at 0 s, 2000 m at 1000 s: the mile is crossed at 1609.344/2000 of the way.
     splits = splits_from_distance([(0, 0.0), (1_000_000, 2000.0)], 1_000_000, 2000.0)

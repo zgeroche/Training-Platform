@@ -150,8 +150,8 @@ def index() -> str:
     else:
         samsung_status = (
             f"<p><b>Samsung</b>: newest run {fmt_local(newest_run)}. "
-            f"Last imported {fmt_local(last_import)} ({ago(last_import)}). "
-            "Runs come from a Samsung Health export you import by hand; there's no automatic Samsung sync yet.</p>"
+            f"Last received {fmt_local(last_import)} ({ago(last_import)}). "
+            "New runs arrive when you tap Sync to PC in the Training Sync phone app.</p>"
         )
     if waiting:
         items = "".join(
@@ -163,7 +163,7 @@ def index() -> str:
             f"<div class=waiting><b>Waiting for Samsung data:</b> WHOOP recorded "
             f"{len(waiting)} run{'s' if len(waiting) != 1 else ''} that "
             f"{'aren' if len(waiting) != 1 else 'isn'}'t on the Runs page yet. "
-            f"{'They' if len(waiting) != 1 else 'It'}'ll appear after the next Samsung import.<ul>{items}</ul></div>"
+            f"{'They' if len(waiting) != 1 else 'It'}'ll appear after the next phone sync.<ul>{items}</ul></div>"
         )
     return f"""<!doctype html><html><head><meta charset=utf-8><title>Training Platform</title>
 <style>body{{font-family:system-ui;max-width:860px;margin:2rem auto;padding:0 1rem}}

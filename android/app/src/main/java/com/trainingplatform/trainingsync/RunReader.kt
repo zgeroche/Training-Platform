@@ -39,9 +39,12 @@ data class RunSummary(
     val pausedByClock: Duration get() = wallClock.minus(moving)
 }
 
+/** One run session as Samsung Health stores it, with the id the server will know it by. */
+data class RunSession(val uid: String, val zoneOffset: ZoneOffset?, val session: ExerciseSession)
+
 class RunReader(private val store: HealthDataStore) {
 
-    suspend fun recentRuns(days: Long): List<RunSummary> {
+    suspend fun recentSessions(days: Long): List<RunSession> {
         val request = DataTypes.EXERCISE.readDataRequestBuilder
             .setLocalTimeFilter(LocalTimeFilter.since(LocalDateTime.now().minusDays(days)))
             .setOrdering(Ordering.DESC)
@@ -53,10 +56,15 @@ class RunReader(private val store: HealthDataStore) {
             val sessions = point.getValue(DataType.ExerciseType.SESSIONS) ?: emptyList()
             sessions.mapIndexed { i, s ->
                 // A run is one data point; it may hold more than one session (e.g. restarts).
-                summarize(if (sessions.size == 1) point.uid else "${point.uid}#$i", point.zoneOffset, s)
+                // The data point's uid is the same id the Samsung export uses, so an upload
+                // replaces an already-imported run instead of duplicating it.
+                RunSession(if (sessions.size == 1) point.uid else "${point.uid}#$i", point.zoneOffset, s)
             }
         }
     }
+
+    suspend fun recentRuns(days: Long): List<RunSummary> =
+        recentSessions(days).map { summarize(it.uid, it.zoneOffset, it.session) }
 
     private fun summarize(uid: String, zone: ZoneOffset?, s: ExerciseSession): RunSummary {
         val log = s.log.orEmpty().sortedBy { it.timestamp }

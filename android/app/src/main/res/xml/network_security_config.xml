@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Training Platform server runs on the home network over plain HTTP. Allow that for its
+     address only; everything else keeps Android's default (HTTPS required).
+     If the PC's address changes, update this and trainingServerUrl in android/training.properties. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.4.56</domain>
+    </domain-config>
+</network-security-config>

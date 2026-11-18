@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,18 +48,53 @@ class MainActivity : ComponentActivity() {
     private val routePermission = Permission.of(DataTypes.EXERCISE_LOCATION, AccessType.READ)
     private val permissions = setOf(exercisePermission, routePermission)
 
-    private var status by mutableStateOf("Tap the button to read your last 30 days of runs from Samsung Health.")
+    private var status by mutableStateOf("Sync to PC sends runs the PC doesn't have yet. List runs shows the last 30 days.")
     private var runs by mutableStateOf<List<RunSummary>>(emptyList())
     private var busy by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SyncWorker.schedule(applicationContext)  // background check every ~15 min on Wi-Fi
         enableEdgeToEdge()
         setContent {
             TrainingSyncTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
-                    RunListScreen(status, runs, busy, onRead = ::readRuns, modifier = Modifier.padding(padding))
+                    RunListScreen(status, runs, busy, onRead = ::readRuns, onSync = ::syncRuns,
+                        modifier = Modifier.padding(padding))
                 }
+            }
+        }
+    }
+
+    /** Make sure we may read exercise data; returns the granted set, or null (with status set) if not. */
+    private suspend fun ensurePermissions(): Set<Permission>? {
+        var granted = store.getGrantedPermissions(permissions)
+        if (!granted.containsAll(permissions)) {
+            status = "Asking Samsung Health for permission…"
+            granted = store.requestPermissions(permissions, this@MainActivity)
+        }
+        if (exercisePermission !in granted) {
+            status = "Samsung Health didn't allow reading exercise data, so there's nothing to show."
+            return null
+        }
+        return granted
+    }
+
+    /** Send runs the server doesn't have yet (newer than its newest run), one at a time. */
+    private fun syncRuns() {
+        lifecycleScope.launch {
+            busy = true
+            try {
+                if (ensurePermissions() == null) return@launch
+                status = RunSync(store).syncNewRuns { status = it }.message
+            } catch (e: java.io.IOException) {
+                status = "Couldn't reach the PC (${e.message}). Is the server running and the phone on home Wi-Fi?"
+            } catch (e: HealthDataException) {
+                status = "Samsung Health error ${e.errorCode}: ${e.errorMessage}"
+            } catch (e: Exception) {
+                status = "Unexpected error: ${e.javaClass.simpleName}: ${e.message}"
+            } finally {
+                busy = false
             }
         }
     }
@@ -66,15 +103,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             busy = true
             try {
-                var granted = store.getGrantedPermissions(permissions)
-                if (!granted.containsAll(permissions)) {
-                    status = "Asking Samsung Health for permission…"
-                    granted = store.requestPermissions(permissions, this@MainActivity)
-                }
-                if (exercisePermission !in granted) {
-                    status = "Samsung Health didn't allow reading exercise data, so there's nothing to show."
-                    return@launch
-                }
+                val granted = ensurePermissions() ?: return@launch
                 status = "Reading runs…"
                 runs = RunReader(store).recentRuns(days = 30)
                 status = buildString {
@@ -95,7 +124,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val dateFormat = DateTimeFormatter.ofPattern("EEE, MMM d · h:mm a", Locale.US)
+internal val dateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE, MMM d · h:mm a", Locale.US)
 
 private fun Duration.clock(): String {
     val s = seconds
@@ -110,12 +139,16 @@ fun RunListScreen(
     runs: List<RunSummary>,
     busy: Boolean,
     onRead: () -> Unit,
+    onSync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Training Sync", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 8.dp))
         Text(status, style = MaterialTheme.typography.bodyMedium)
-        Button(onClick = onRead, enabled = !busy) { Text(if (busy) "Reading…" else "Read runs from Samsung Health") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onSync, enabled = !busy) { Text("Sync to PC") }
+            OutlinedButton(onClick = onRead, enabled = !busy) { Text("List runs") }
+        }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(runs, key = { it.uid }) { RunCard(it) }
         }
