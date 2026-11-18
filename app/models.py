@@ -5,10 +5,10 @@ plus the full API record in `raw`, so nothing is lost if we need a field later.
 All datetimes are naive UTC.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -184,6 +184,46 @@ class SamsungSplit(Base):
     start_elapsed_ms: Mapped[int]
     end_elapsed_ms: Mapped[int]
     is_partial: Mapped[bool] = mapped_column(Boolean)
+
+
+class PlanPhase(Base):
+    """A stretch of training with its own weekly template, from `starts_on` until the next phase starts."""
+
+    __tablename__ = "plan_phase"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    starts_on: Mapped[date] = mapped_column(Date, unique=True)
+    name: Mapped[str | None]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class PlanTemplateDay(Base):
+    """One weekday of a phase's weekly template (0 = Monday)."""
+
+    __tablename__ = "plan_template_day"
+
+    phase_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    weekday: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String)  # run | rest | unplanned
+    length: Mapped[str | None]  # short | medium | long
+    effort: Mapped[str | None]  # easy | race_pace | tempo
+    default_miles: Mapped[float | None] = mapped_column(Float)
+
+
+class PlannedRun(Base):
+    """A change to one calendar day's plan, overriding the weekly template (entered on the Training page)."""
+
+    __tablename__ = "planned_run"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)  # local calendar day
+    kind: Mapped[str] = mapped_column(String, default="run")  # run | rest | unplanned
+    length: Mapped[str | None]
+    effort: Mapped[str | None]
+    distance_mi: Mapped[float | None] = mapped_column(Float)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
 
 
 class RunMatch(Base):

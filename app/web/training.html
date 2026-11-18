@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training · Training Platform</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .page { max-width: 1400px; }
+  .cal-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+  .cal-nav { display: flex; gap: 8px; align-items: center; }
+  .cal-nav button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
+                    background: var(--surface); color: var(--fg); cursor: pointer; }
+  .cal-nav button:hover { border-color: var(--accent); }
+  .cal-scroll { overflow-x: auto; }
+  .cal { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)) minmax(110px, .8fr); gap: 1px;
+         background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-width: 960px; }
+  .cal > div { background: var(--surface); }
+  .dow { padding: 8px 10px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .day { min-height: 112px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+  .day.other { background: var(--bg); }
+  .day.other .num { color: var(--muted); }
+  .day.today { box-shadow: inset 0 0 0 2px var(--accent); }
+  .day-top { display: flex; justify-content: space-between; align-items: center; }
+  .num { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .rec { width: 10px; height: 10px; border-radius: 50%; }
+  .rec-green { background: #16a34a; } .rec-yellow { background: #eab308; } .rec-red { background: #dc2626; }
+  .chip { display: block; font-size: 13px; padding: 2px 8px; border-radius: 6px; white-space: nowrap;
+          overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  a.chip.run { background: var(--accent-soft); color: var(--fg); border-left: 3px solid var(--accent); }
+  a.chip.run:hover { text-decoration: none; filter: brightness(1.05); }
+  .chip.act { color: var(--muted); padding-left: 11px; }
+  .week { padding: 8px 10px; display: flex; flex-direction: column; justify-content: center; gap: 2px;
+          font-variant-numeric: tabular-nums; }
+  .week .miles { font-size: 1.15rem; font-weight: 600; }
+  .week .sub { font-size: 12px; color: var(--muted); }
+  .day { cursor: pointer; }
+  .day:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
+  .day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .chip.plan { border: 1px dashed var(--accent); color: var(--accent); }
+  .chip.plan.changed { border-style: solid; }
+  .chip.plan.rest { border-color: var(--line); color: var(--muted); }
+  .plan-dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--fg);
+                 padding: 20px; width: min(360px, calc(100vw - 32px)); }
+  .plan-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+  .plan-dialog h2 { margin: 0 0 4px; font-size: 1.1rem; }
+  .plan-dialog form { display: grid; gap: 12px; }
+  .plan-dialog label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  .plan-dialog.wide { width: min(760px, calc(100vw - 32px)); }
+  .tpl-top { display: grid; grid-template-columns: 1.2fr 1fr 1.2fr; gap: 12px; }
+  @media (max-width: 640px) { .tpl-top { grid-template-columns: 1fr; } }
+  .tpl-table td { padding: 4px 6px; }
+  .tpl-table select, .tpl-table input { width: 100%; padding: 6px 8px; }
+  .tpl-table input { max-width: 110px; }
+  .run-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .run-fields .span2 { grid-column: 1 / -1; }
+  .plan-dialog select { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+                        background: var(--bg); color: var(--fg); }
+  .plan-dialog input { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+                       background: var(--bg); color: var(--fg); }
+  .plan-dialog input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .dialog-actions button { font: inherit; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line);
+                           background: var(--surface); color: var(--fg); cursor: pointer; }
+  .dialog-actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .dialog-actions .danger { margin-right: auto; color: var(--warn); }
+  .dialog-error { color: var(--warn); font-size: 13px; min-height: 1em; margin: 0; }
+  :root { --ok: #15803d; --short: #b45309; --bad: #b91c1c; --extra: #2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --ok: #4ade80; --short: #fbbf24; --bad: #f87171; --extra: #60a5fa; } }
+  .status { font-size: 12px; font-weight: 600; padding: 0 2px; margin-top: auto; font-variant-numeric: tabular-nums; }
+  .status.done { color: var(--ok); } .status.short { color: var(--short); }
+  .status.missed { color: var(--bad); } .status.extra { color: var(--extra); }
+  .day.race { box-shadow: inset 0 0 0 2px var(--accent); background: linear-gradient(180deg, var(--accent-soft), var(--surface)); }
+  .chip.plan.race { border: 1px solid var(--accent); background: var(--accent); color: #fff; font-weight: 600; }
+  .race-label { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  .countdown { color: var(--muted); margin: 4px 0 0; }
+  .countdown b { color: var(--fg); }
+  .week .vs { font-size: 13px; color: var(--muted); }
+  .week .tally { font-size: 12px; display: flex; flex-wrap: wrap; gap: 0 8px; }
+  .week-bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin: 2px 0; }
+  .week-bar > div { height: 100%; background: var(--accent); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); align-items: center; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="crumbs"><a href="/">Training Platform</a> · <a href="/runs">Runs</a> · <b>Training</b></div>
+
+  <div class="cal-head">
+    <div>
+      <h1 id="month-title">Training</h1>
+      <p class="countdown" id="countdown"></p>
+    </div>
+    <div class="cal-nav">
+      <button type="button" id="template-btn">Weekly plan</button>
+      <button type="button" id="prev" aria-label="Previous month">‹</button>
+      <button type="button" id="today-btn">Today</button>
+      <button type="button" id="next" aria-label="Next month">›</button>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="chip run" style="display:inline-block;padding:0 6px">6.20</span> run (miles), opens the run</span>
+    <span>Pickleball: other activity from WHOOP</span>
+    <span><i class="rec rec-green"></i><i class="rec rec-yellow"></i><i class="rec rec-red"></i> recovery that morning</span>
+    <span><span class="chip plan" style="display:inline-block;padding:0 6px">Short · Tempo</span> plan from the weekly plan</span>
+    <span><span class="chip plan changed" style="display:inline-block;padding:0 6px">Long · 9.0 mi</span> changed for that day</span>
+    <span>Click any day to change its plan.</span>
+    <span><b class="status done">Done</b> ran ≥95% of plan · <b class="status short">Short</b> less · <b class="status missed">Missed</b> no run · <b class="status extra">Extra</b> unplanned run</span>
+  </div>
+
+  <section class="cal-scroll">
+    <div class="cal" id="cal" role="grid" aria-label="Training calendar"></div>
+  </section>
+  <p class="note muted" id="cal-note"></p>
+</main>
+
+<dialog class="plan-dialog" id="plan-dialog" aria-labelledby="plan-title">
+  <form id="plan-form" method="dialog">
+    <div>
+      <h2 id="plan-title">Plan a run</h2>
+      <p class="muted" id="plan-actual" style="margin:0;font-size:13px"></p>
+    </div>
+    <label>Type
+      <select id="plan-kind">
+        <option value="run">Run</option>
+        <option value="rest">Rest</option>
+        <option value="unplanned">Unplanned</option>
+      </select>
+    </label>
+    <div class="run-fields" id="run-fields">
+      <label>Length
+        <select id="plan-length">
+          <option value="">–</option><option value="short">Short</option>
+          <option value="medium">Medium</option><option value="long">Long</option>
+        </select>
+      </label>
+      <label>Effort
+        <select id="plan-effort">
+          <option value="">–</option><option value="easy">Easy</option>
+          <option value="race_pace">Race pace</option><option value="tempo">Tempo</option>
+        </select>
+      </label>
+      <label class="span2">Miles (optional)
+        <input id="plan-miles" name="miles" type="number" inputmode="decimal" min="0.1" max="100" step="0.1">
+      </label>
+    </div>
+    <label>Note (optional)
+      <input id="plan-note" name="note" type="text" maxlength="200" placeholder="e.g. hilly route, with friends">
+    </label>
+    <p class="muted" id="plan-source" style="margin:0;font-size:13px"></p>
+    <p class="dialog-error" id="plan-error"></p>
+    <div class="dialog-actions">
+      <button type="button" class="danger" id="plan-reset">Reset to weekly plan</button>
+      <button type="button" id="plan-cancel">Cancel</button>
+      <button type="submit" class="primary" id="plan-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="plan-dialog wide" id="tpl-dialog" aria-labelledby="tpl-title">
+  <form id="tpl-form" method="dialog">
+    <div>
+      <h2 id="tpl-title">Weekly plan</h2>
+      <p class="muted" style="margin:0;font-size:13px">Every week follows its phase's template from the phase's start date.
+        Days you change on the calendar keep your changes.</p>
+    </div>
+    <div class="tpl-top">
+      <label>Phase
+        <select id="tpl-phase"></select>
+      </label>
+      <label>Starts on
+        <input id="tpl-start" type="date" required>
+      </label>
+      <label>Name (optional)
+        <input id="tpl-name" type="text" maxlength="80" placeholder="e.g. Base building">
+      </label>
+    </div>
+    <div class="table-wrap">
+      <table class="tpl-table">
+        <thead><tr><th>Day</th><th>Type</th><th>Length</th><th>Effort</th><th>Default miles</th></tr></thead>
+        <tbody id="tpl-rows"></tbody>
+      </table>
+    </div>
+    <p class="dialog-error" id="tpl-error"></p>
+    <div class="dialog-actions">
+      <button type="button" class="danger" id="tpl-delete">Delete phase</button>
+      <button type="button" id="tpl-cancel">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/common.js"></script>
+<script>
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const LENGTH = { short: "Short", medium: "Medium", long: "Long" };
+const EFFORT = { easy: "Easy", race_pace: "Race pace", tempo: "Tempo" };
+
+function planLabel(p) {
+  if (p.kind === "rest") return "Rest";
+  if (p.kind === "race") return `${p.note || "Race"} · ${p.distance_mi} mi`;
+  const parts = [LENGTH[p.length], EFFORT[p.effort], p.distance_mi ? `${p.distance_mi.toFixed(1)} mi` : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "Run";
+}
+const sportName = (s) => (s || "activity").replace(/[-_]/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+let shown = null;  // "YYYY-MM"
+
+function shiftMonth(ym, delta) {
+  let [y, m] = ym.split("-").map(Number);
+  m += delta;
+  while (m < 1) { m += 12; y--; }
+  while (m > 12) { m -= 12; y++; }
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+function recBand(score) {
+  return score >= 67 ? "rec-green" : score >= 34 ? "rec-yellow" : "rec-red";
+}
+
+function render(data) {
+  shown = `${data.year}-${String(data.month).padStart(2, "0")}`;
+  document.getElementById("month-title").textContent =
+    new Date(Date.UTC(data.year, data.month - 1, 1)).toLocaleDateString(undefined, { timeZone: "UTC", month: "long", year: "numeric" });
+
+  const cal = document.getElementById("cal");
+  const cells = [...DOW.map((d) => el("div", { class: "dow", role: "columnheader" }, d)),
+                 el("div", { class: "dow", role: "columnheader" }, "Week")];
+
+  for (const week of data.weeks) {
+    for (const day of week.days) {
+      const [y, m, d] = day.date.split("-").map(Number);
+      const inMonth = m === data.month;
+      const isRace = day.plan && day.plan.kind === "race";
+      const cls = ["day", inMonth ? "" : "other", day.date === data.today ? "today" : "", isRace ? "race" : ""]
+        .join(" ").trim();
+      const top = el("div", { class: "day-top" },
+        el("span", { class: "num" }, d, isRace ? el("span", { class: "race-label" }, " Race day") : ""));
+      if (day.recovery != null) {
+        top.append(el("i", { class: `rec ${recBand(day.recovery)}`, title: `Recovery ${Math.round(day.recovery)}%` }));
+      }
+      const runs = day.runs.map((r) => el("a", {
+        class: "chip run", href: `/runs/${r.id}`,
+        title: `${fmtNum(r.distance_mi, 2)} mi · ${fmtDuration(r.duration_ms)} · ${fmtPace(r.pace_sec_per_mile)} /mi`,
+      }, `${fmtNum(r.distance_mi, 2)} mi`));
+      const acts = day.activities.map((a) => el("span", {
+        class: "chip act", title: `${sportName(a.sport)}${a.minutes ? ` · ${a.minutes} min` : ""}${a.strain != null ? ` · strain ${a.strain.toFixed(1)}` : ""}`,
+      }, sportName(a.sport)));
+      const p = day.plan;
+      const plan = p
+        ? [el("span", {
+            class: `chip plan${p.kind === "rest" ? " rest" : ""}${p.kind === "race" ? " race" : ""}${p.source === "day" ? " changed" : ""}`,
+            title: `${p.source === "day" ? "Changed for this day" : "From the weekly plan"}${p.note ? ` · ${p.note}` : ""}`,
+          }, planLabel(p))]
+        : [];
+      const cell = el("div", {
+        class: cls, role: "gridcell", tabindex: "0",
+        "aria-label": `${day.date}${p ? `, planned: ${planLabel(p)}` : ""}. Press Enter to plan.`,
+        onclick: (e) => { if (!e.target.closest("a")) openPlan(day); },
+        onkeydown: (e) => { if (e.key === "Enter" && e.target === e.currentTarget) openPlan(day); },
+      }, top, ...plan, ...runs, ...acts, statusBadge(day));
+      cells.push(cell);
+    }
+    cells.push(weekCell(week));
+  }
+  cal.replaceChildren(...cells);
+  renderCountdown(data.race, data.today);
+}
+
+function statusBadge(day) {
+  const s = day.status;
+  const p = day.plan;
+  if (!["done", "short", "missed", "extra"].includes(s)) return "";
+  const text = {
+    done: "Done",
+    short: p && p.distance_mi ? `Short · ${day.run_miles.toFixed(1)} of ${p.distance_mi.toFixed(1)}` : "Short",
+    missed: "Missed",
+    extra: "Extra",
+  }[s];
+  return el("span", { class: `status ${s}` }, text);
+}
+
+function weekCell(w) {
+  const parts = [el("span", { class: "miles" }, w.run_miles ? `${w.run_miles.toFixed(1)} mi` : "–")];
+  if (w.planned_miles) {
+    const pct = Math.min(100, (100 * w.run_miles) / w.planned_miles);
+    parts.push(
+      el("div", { class: "week-bar", role: "img", "aria-label": `${Math.round(pct)}% of planned miles` },
+        el("div", { style: `width:${pct.toFixed(0)}%` })),
+      el("span", { class: "vs" }, `of ${w.planned_miles.toFixed(1)} planned${w.planned_runs_without_miles ? ` (+${w.planned_runs_without_miles} w/o miles)` : ""}`));
+  } else if (w.planned_runs) {
+    parts.push(el("span", { class: "vs" }, `${w.planned_runs} planned run${w.planned_runs === 1 ? "" : "s"}`));
+  } else {
+    parts.push(el("span", { class: "sub" }, w.runs ? `${w.runs} run${w.runs === 1 ? "" : "s"}` : "no runs"));
+  }
+  const tally = [["done", "done"], ["short", "short"], ["missed", "missed"], ["extra", "extra"]]
+    .filter(([k]) => w[k]).map(([k, label]) => el("span", { class: `status ${k}` }, `${w[k]} ${label}`));
+  if (tally.length) parts.push(el("span", { class: "tally" }, tally));
+  return el("div", { class: "week", role: "gridcell" }, parts);
+}
+
+function renderCountdown(race, today) {
+  const box = document.getElementById("countdown");
+  if (!race) { box.textContent = ""; return; }
+  const when = new Date(race.date + "T12:00:00Z").toLocaleDateString(undefined,
+    { timeZone: "UTC", weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const n = race.days_to_go;
+  const span = n > 0 ? `${Math.floor(n / 7)} weeks ${n % 7} days to go (${n} days)` : n === 0 ? "today!" : "done";
+  box.replaceChildren(el("b", {}, `${race.name} · ${when}`), ` · ${span}`);
+}
+
+async function load(ym) {
+  const note = document.getElementById("cal-note");
+  try {
+    const data = await getJSON(ym ? `/api/calendar?month=${ym}` : "/api/calendar");
+    render(data);
+    note.textContent = "";
+    try { history.replaceState(null, "", `#${shown}`); } catch (e) { /* ignore */ }
+  } catch (err) {
+    note.textContent = `Couldn't load the calendar: ${err.message}`;
+  }
+}
+
+// ---------- planning ----------
+
+const dialog = document.getElementById("plan-dialog");
+const kindInput = document.getElementById("plan-kind");
+const lengthInput = document.getElementById("plan-length");
+const effortInput = document.getElementById("plan-effort");
+const milesInput = document.getElementById("plan-miles");
+const noteInput = document.getElementById("plan-note");
+const errorBox = document.getElementById("plan-error");
+let editing = null;  // the day being planned
+
+function syncRunFields() {
+  document.getElementById("run-fields").hidden = kindInput.value !== "run";
+}
+kindInput.addEventListener("change", syncRunFields);
+
+function openPlan(day) {
+  editing = day;
+  const p = day.plan;
+  const label = new Date(day.date + "T12:00:00Z").toLocaleDateString(undefined,
+    { timeZone: "UTC", weekday: "long", month: "short", day: "numeric" });
+  document.getElementById("plan-title").textContent = `Plan for ${label}`;
+  document.getElementById("plan-actual").textContent = day.runs.length ? `Ran ${day.run_miles.toFixed(2)} mi that day.` : "";
+  kindInput.value = p ? p.kind : "run";
+  lengthInput.value = p && p.length ? p.length : "";
+  effortInput.value = p && p.effort ? p.effort : "";
+  milesInput.value = p && p.distance_mi ? p.distance_mi : "";
+  noteInput.value = p && p.note ? p.note : "";
+  const changed = p && p.source === "day";
+  document.getElementById("plan-source").textContent = changed
+    ? "Changed for this day. Reset to follow the weekly plan again."
+    : p ? "Following the weekly plan. Saving makes this day keep your changes." : "Nothing planned. Saving plans this day.";
+  document.getElementById("plan-reset").hidden = !changed;
+  syncRunFields();
+  errorBox.textContent = "";
+  dialog.showModal();
+  kindInput.focus();
+}
+
+async function send(method, body) {
+  const res = await fetch(`/api/plans/${editing.date}`, {
+    method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(res.status === 422 ? "Check the miles: between 0.1 and 100." : `Server answered ${res.status}`);
+}
+
+document.getElementById("plan-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const miles = milesInput.value === "" ? null : parseFloat(milesInput.value);
+  if (kindInput.value === "run" && miles !== null && !(miles > 0 && miles <= 100)) {
+    errorBox.textContent = "Miles must be between 0.1 and 100, or left empty.";
+    return;
+  }
+  try {
+    await send("PUT", {
+      kind: kindInput.value, length: lengthInput.value || null, effort: effortInput.value || null,
+      distance_mi: miles, note: noteInput.value,
+    });
+    dialog.close();
+    load(shown);
+  } catch (err) { errorBox.textContent = `Couldn't save: ${err.message}`; }
+});
+document.getElementById("plan-reset").addEventListener("click", async () => {
+  try {
+    await send("DELETE");
+    dialog.close();
+    load(shown);
+  } catch (err) { errorBox.textContent = `Couldn't reset: ${err.message}`; }
+});
+document.getElementById("plan-cancel").addEventListener("click", () => dialog.close());
+
+// ---------- weekly plan (phases) ----------
+
+const tplDialog = document.getElementById("tpl-dialog");
+const tplPhase = document.getElementById("tpl-phase");
+const tplStart = document.getElementById("tpl-start");
+const tplName = document.getElementById("tpl-name");
+const tplError = document.getElementById("tpl-error");
+let phases = [];
+
+const options = (pairs, value) => pairs.map(([v, label]) => {
+  const o = el("option", { value: v }, label);
+  if (v === (value ?? "")) o.selected = true;
+  return o;
+});
+
+function tplRow(wd, d) {
+  const kind = el("select", { "aria-label": `${DOW_LONG[wd]} type` },
+    options([["run", "Run"], ["rest", "Rest"], ["unplanned", "Unplanned"]], d.kind));
+  const length = el("select", { "aria-label": `${DOW_LONG[wd]} length` },
+    options([["", "–"], ["short", "Short"], ["medium", "Medium"], ["long", "Long"]], d.length));
+  const effort = el("select", { "aria-label": `${DOW_LONG[wd]} effort` },
+    options([["", "–"], ["easy", "Easy"], ["race_pace", "Race pace"], ["tempo", "Tempo"]], d.effort));
+  const miles = el("input", { type: "number", min: "0.1", max: "100", step: "0.1", inputmode: "decimal",
+                              "aria-label": `${DOW_LONG[wd]} default miles`, placeholder: "–" });
+  if (d.default_miles) miles.value = d.default_miles;
+  const sync = () => { const off = kind.value !== "run"; length.disabled = effort.disabled = miles.disabled = off; };
+  kind.addEventListener("change", sync);
+  sync();
+  const tr = el("tr", {}, el("td", {}, DOW_LONG[wd]), el("td", {}, kind), el("td", {}, length),
+                el("td", {}, effort), el("td", {}, miles));
+  tr.read = () => ({
+    kind: kind.value,
+    length: kind.value === "run" ? length.value || null : null,
+    effort: kind.value === "run" ? effort.value || null : null,
+    default_miles: kind.value === "run" && miles.value !== "" ? parseFloat(miles.value) : null,
+  });
+  return tr;
+}
+
+function nextMonday() {
+  const d = new Date();
+  d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7));
+  return d.toISOString().slice(0, 10);
+}
+
+function showPhase(key) {
+  const isNew = key === "new";
+  const base = isNew ? (phases[phases.length - 1] || null) : phases.find((p) => p.starts_on === key);
+  const days = base ? base.days : DOW.map((_, wd) => ({ weekday: wd, kind: "unplanned" }));
+  tplStart.value = isNew ? nextMonday() : base.starts_on;
+  tplStart.readOnly = !isNew;
+  tplName.value = isNew ? "" : base.name || "";
+  document.getElementById("tpl-delete").hidden = isNew;
+  document.getElementById("tpl-rows").replaceChildren(...days.map((d) => tplRow(d.weekday, d)));
+  tplError.textContent = "";
+}
+
+async function openTemplate() {
+  try {
+    phases = await getJSON("/api/plan/phases");
+  } catch (err) { alert(`Couldn't load the weekly plan: ${err.message}`); return; }
+  const today = new Date().toISOString().slice(0, 10);
+  const current = [...phases].reverse().find((p) => p.starts_on <= today) || phases[0];
+  tplPhase.replaceChildren(
+    ...phases.map((p) => el("option", { value: p.starts_on },
+      `From ${new Date(p.starts_on + "T12:00:00Z").toLocaleDateString(undefined, { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" })}${p.name ? ` · ${p.name}` : ""}`)),
+    el("option", { value: "new" }, "+ New phase…"));
+  tplPhase.value = current ? current.starts_on : "new";
+  showPhase(tplPhase.value);
+  tplDialog.showModal();
+}
+
+tplPhase.addEventListener("change", () => showPhase(tplPhase.value));
+document.getElementById("template-btn").addEventListener("click", openTemplate);
+document.getElementById("tpl-cancel").addEventListener("click", () => tplDialog.close());
+
+document.getElementById("tpl-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!tplStart.value) { tplError.textContent = "Pick a start date."; return; }
+  const days = [...document.getElementById("tpl-rows").children].map((tr) => tr.read());
+  if (days.some((d) => d.default_miles !== null && !(d.default_miles > 0 && d.default_miles <= 100))) {
+    tplError.textContent = "Default miles must be between 0.1 and 100, or left empty.";
+    return;
+  }
+  try {
+    const res = await fetch(`/api/plan/phases/${tplStart.value}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: tplName.value, days }),
+    });
+    if (!res.ok) throw new Error(`server answered ${res.status}`);
+    tplDialog.close();
+    load(shown);
+  } catch (err) { tplError.textContent = `Couldn't save: ${err.message}`; }
+});
+
+document.getElementById("tpl-delete").addEventListener("click", async () => {
+  const btn = document.getElementById("tpl-delete");
+  if (btn.dataset.confirm !== "yes") {  // two-step: the page can't use confirm() everywhere
+    btn.dataset.confirm = "yes";
+    btn.textContent = "Click again to delete";
+    setTimeout(() => { btn.dataset.confirm = ""; btn.textContent = "Delete phase"; }, 4000);
+    return;
+  }
+  try {
+    const res = await fetch(`/api/plan/phases/${tplStart.value}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`server answered ${res.status}`);
+    tplDialog.close();
+    load(shown);
+  } catch (err) { tplError.textContent = `Couldn't delete: ${err.message}`; }
+});
+
+document.getElementById("prev").addEventListener("click", () => load(shiftMonth(shown, -1)));
+document.getElementById("next").addEventListener("click", () => load(shiftMonth(shown, 1)));
+document.getElementById("today-btn").addEventListener("click", () => load(null));
+const monthFromHash = () => (/^#(\d{4}-\d{2})$/.exec(location.hash) || [])[1] || null;
+// Typing or bookmarking #YYYY-MM, or using back/forward, switches months without a reload.
+window.addEventListener("hashchange", () => { const m = monthFromHash(); if (m && m !== shown) load(m); });
+load(monthFromHash());
+</script>
+</body>
+</html>

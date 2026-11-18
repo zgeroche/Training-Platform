@@ -7,19 +7,27 @@ import asyncio
 import html
 import ipaddress
 import logging
-from contextlib import asynccontextmanager
 import secrets
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, func, select
 
+from app.calendar_data import calendar_month
 from app.config import get_settings
-from app.db import SessionLocal, init_db
+from app.db import SessionLocal, init_db, utcnow
+from app.days import cycle_on, day_context, day_for_moment
+from app.matching import RUN_SPORTS, rebuild_matches
 from app.models import (
+    PlannedRun,
+    PlanPhase,
+    PlanTemplateDay,
     RunMatch,
     SamsungRoutePoint,
     SamsungRun,
@@ -31,10 +39,9 @@ from app.models import (
     WhoopSleep,
     WhoopWorkout,
 )
-from app.days import cycle_on, day_context, day_for_moment
-from app.matching import RUN_SPORTS, rebuild_matches
+from app.plans import phase_dict, plans_between
 from app.samsung.ingest import RunUpload, ingest_run
-from app.timefmt import ago, fmt_local
+from app.timefmt import ago, fmt_local, to_local
 from app.whoop import auth
 from app.whoop.sync import sync_all
 
@@ -82,7 +89,12 @@ async def only_uploads_from_other_devices(request: Request, call_next):
         LAN_ALLOWED_PREFIXES
     ):
         return PlainTextResponse("Only available on the PC running the server.", status_code=403)
-    return await call_next(request)
+    response = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        # Pages and their scripts change as the app grows: make browsers re-check them on every load
+        # (a cheap "not modified" reply when unchanged) instead of showing a stale cached copy.
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 # ---------- status page ----------
@@ -171,7 +183,7 @@ def index() -> str:
 table{{border-collapse:collapse;margin:1rem 0}}td,th{{border:1px solid #ccc;padding:4px 10px;text-align:left}}
 .warn{{color:#b45309}}.btn,button{{display:inline-block;padding:6px 14px;margin:4px 0}}form{{display:inline-block;margin-right:8px}}
 .waiting{{border-left:3px solid #b45309;padding:4px 12px;margin:8px 0}}.waiting ul{{margin:4px 0}}</style>
-</head><body><h1>Training Platform</h1><p><a href=/runs><b>View runs →</b></a></p>{action}
+</head><body><h1>Training Platform</h1><p><a href=/runs><b>Runs →</b></a> &nbsp; <a href=/training><b>Training →</b></a></p>{action}
 <h2>Sync status</h2>{whoop_status}{samsung_status}
 <h2>Stored records</h2><table>{count_rows}</table>
 <p>JSON: <a href=/api/runs>/api/runs</a> · <a href=/api/workouts>/api/workouts</a> · <a href=/api/recovery>/api/recovery</a> ·
@@ -188,6 +200,11 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 @app.get("/runs", include_in_schema=False)
 def runs_page() -> FileResponse:
     return FileResponse(WEB_DIR / "runs.html")
+
+
+@app.get("/training", include_in_schema=False)
+def training_page() -> FileResponse:
+    return FileResponse(WEB_DIR / "training.html")
 
 
 @app.get("/runs/{run_id}", include_in_schema=False)
@@ -365,6 +382,116 @@ def get_day(day: date) -> dict:
         if cycle is None:
             raise HTTPException(404, f"No WHOOP data for {day.isoformat()}")
         return day_context(s, cycle)
+
+
+@app.get("/api/calendar")
+def get_calendar(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$", description="YYYY-MM; default this month")) -> dict:
+    """A Monday-first month grid: runs, other WHOOP activities and recovery for each day, plus week totals."""
+    today = to_local(datetime.now(timezone.utc).replace(tzinfo=None)).date()
+    if month:
+        year, mon = (int(x) for x in month.split("-"))
+        if not 1 <= mon <= 12:
+            raise HTTPException(422, "Month must be 01-12")
+    else:
+        year, mon = today.year, today.month
+    with SessionLocal() as s:
+        return calendar_month(s, year, mon, today)
+
+
+Kind = Literal["run", "rest", "unplanned"]
+Length = Literal["short", "medium", "long"]
+Effort = Literal["easy", "race_pace", "tempo"]
+
+
+class PlanIn(BaseModel):
+    """A day's plan, replacing what the weekly template says for that day."""
+
+    kind: Kind = "run"
+    length: Length | None = None
+    effort: Effort | None = None
+    distance_mi: float | None = Field(None, gt=0, le=100, description="Planned distance in miles (optional)")
+    note: str | None = Field(None, max_length=200)
+
+
+@app.put("/api/plans/{day}")
+def set_plan(day: date, plan: PlanIn) -> dict:
+    """Change one day's plan. It then stays as set, whatever the weekly template says."""
+    with SessionLocal() as s:
+        row = s.get(PlannedRun, day)
+        now = utcnow()
+        if row is None:
+            row = PlannedRun(day=day, created_at=now)
+            s.add(row)
+        is_run = plan.kind == "run"
+        row.kind = plan.kind
+        row.length = plan.length if is_run else None
+        row.effort = plan.effort if is_run else None
+        row.distance_mi = round(plan.distance_mi, 2) if is_run and plan.distance_mi else None
+        row.note = (plan.note or "").strip() or None
+        row.updated_at = now
+        s.commit()
+        return {"date": day.isoformat(), "plan": plans_between(s, day, day)[day]}
+
+
+@app.delete("/api/plans/{day}")
+def reset_plan(day: date) -> dict:
+    """Undo a day's change, so it follows the weekly template again. Returns the plan it now has."""
+    with SessionLocal() as s:
+        row = s.get(PlannedRun, day)
+        if row is not None:
+            s.delete(row)
+            s.commit()
+        return {"date": day.isoformat(), "plan": plans_between(s, day, day)[day]}
+
+
+class TemplateDayIn(BaseModel):
+    kind: Kind = "unplanned"
+    length: Length | None = None
+    effort: Effort | None = None
+    default_miles: float | None = Field(None, gt=0, le=100)
+
+
+class PhaseIn(BaseModel):
+    name: str | None = Field(None, max_length=80)
+    days: list[TemplateDayIn] = Field(min_length=7, max_length=7, description="Monday first")
+
+
+@app.get("/api/plan/phases")
+def list_phases() -> list[dict]:
+    with SessionLocal() as s:
+        return [phase_dict(s, p) for p in s.scalars(select(PlanPhase).order_by(PlanPhase.starts_on))]
+
+
+@app.put("/api/plan/phases/{starts_on}")
+def save_phase(starts_on: date, body: PhaseIn) -> dict:
+    """Create or replace the phase starting on `starts_on` and its weekly template."""
+    with SessionLocal() as s:
+        now = utcnow()
+        phase = s.scalars(select(PlanPhase).where(PlanPhase.starts_on == starts_on)).first()
+        if phase is None:
+            phase = PlanPhase(starts_on=starts_on, created_at=now)
+            s.add(phase)
+        phase.name = (body.name or "").strip() or None
+        phase.updated_at = now
+        s.flush()
+        s.execute(delete(PlanTemplateDay).where(PlanTemplateDay.phase_id == phase.id))
+        for wd, d in enumerate(body.days):
+            is_run = d.kind == "run"
+            s.add(PlanTemplateDay(phase_id=phase.id, weekday=wd, kind=d.kind,
+                                  length=d.length if is_run else None, effort=d.effort if is_run else None,
+                                  default_miles=d.default_miles if is_run else None))
+        s.commit()
+        return phase_dict(s, phase)
+
+
+@app.delete("/api/plan/phases/{starts_on}", status_code=204)
+def delete_phase(starts_on: date) -> None:
+    with SessionLocal() as s:
+        phase = s.scalars(select(PlanPhase).where(PlanPhase.starts_on == starts_on)).first()
+        if phase is not None:
+            s.execute(delete(PlanTemplateDay).where(PlanTemplateDay.phase_id == phase.id))
+            s.delete(phase)
+            s.commit()
 
 
 # ---------- phone uploads ----------

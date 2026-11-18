@@ -1,3 +1,4 @@
+from datetime import date
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,11 @@ class Settings(BaseSettings):
 
     # Time zone for times shown in the app (IANA name). America/Denver = Mountain Time.
     local_timezone: str = "America/Denver"
+
+    # Goal race. Plans stop after race day; the calendar marks it and counts down to it.
+    race_day: date = date(2027, 5, 2)
+    race_name: str = "Marathon"
+    race_distance_mi: float = 26.2
 
     sync_interval_minutes: int = 20
     whoop_backfill_days: int = 0  # 0 = all available history
