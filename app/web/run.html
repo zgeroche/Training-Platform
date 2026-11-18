@@ -49,6 +49,23 @@
   .tip { position: absolute; top: 4px; pointer-events: none; background: var(--surface); border: 1px solid var(--line);
          border-radius: 6px; padding: 4px 8px; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums;
          box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+  .day-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+  @media (max-width: 900px) { .day-grid { grid-template-columns: minmax(0, 1fr); } }
+  .day-grid h3 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+  .recovery { display: flex; gap: 14px; align-items: center; }
+  .rec-score { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
+               font-size: 1.3rem; font-weight: 700; border: 5px solid var(--rec, var(--line)); flex: none; }
+  .rec-green { --rec: #16a34a; } .rec-yellow { --rec: #eab308; } .rec-red { --rec: #dc2626; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .stages { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); margin: 8px 0 4px; }
+  .stages > div { height: 100%; }
+  .st-deep { background: #6d28d9; } .st-rem { background: #0ea5e9; } .st-light { background: #a5b4fc; } .st-awake { background: #94a3b8; }
+  .stage-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+  .stage-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+  .acts { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+  .acts li { display: flex; justify-content: space-between; gap: 10px; }
+  .acts .when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   :root { --elev: rgba(93, 107, 122, .16); }
   @media (prefers-color-scheme: dark) { :root { --elev: rgba(147, 162, 178, .16); } }
 </style>
@@ -62,6 +79,11 @@
   </header>
 
   <section class="panel stats" id="stats"></section>
+
+  <section class="panel">
+    <h2 id="day-title">That day</h2>
+    <div class="day-grid" id="day"></div>
+  </section>
 
   <div class="layout">
     <section class="panel">
@@ -330,6 +352,89 @@ function renderPaceChart(run) {
   document.getElementById("pace-note").textContent = noteBits.join(" ");
 }
 
+// ---------- that day (WHOOP cycle: recovery, sleep, activities) ----------
+
+const localTime = (iso) => iso
+  ? new Date(iso + "Z").toLocaleTimeString(undefined, { timeZone: "UTC", hour: "numeric", minute: "2-digit" })
+  : "–";
+const sportName = (s) => (s || "activity").replace(/[-_]/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+const hm = (hours) => hours == null ? "–" : `${Math.floor(hours)}h ${String(Math.round((hours % 1) * 60)).padStart(2, "0")}m`;
+
+function kv(pairs) {
+  return el("div", { class: "kv" }, pairs.flatMap(([k, v]) => [el("span", {}, k), el("span", {}, v)]));
+}
+
+function activityList(items, thisWorkoutId) {
+  const others = items.filter((a) => a.whoop_workout_id !== thisWorkoutId);
+  if (!others.length) return el("p", { class: "muted", style: "margin:0 0 12px" }, "Nothing else recorded.");
+  return el("ul", { class: "acts" }, others.map((a) => {
+    const name = a.samsung_run_id
+      ? el("a", { href: `/runs/${a.samsung_run_id}` }, sportName(a.sport))
+      : el("span", {}, sportName(a.sport));
+    const bits = [localTime(a.start_local), a.minutes != null ? `${a.minutes} min` : null,
+                  a.strain != null ? `strain ${a.strain.toFixed(1)}` : null].filter(Boolean).join(" · ");
+    return el("li", {}, name, el("span", { class: "when" }, bits));
+  }));
+}
+
+function renderDay(run) {
+  const box = document.getElementById("day");
+  const d = run.day;
+  if (!d) {
+    box.append(el("p", { class: "muted" }, "No WHOOP data covers this run's day."));
+    return;
+  }
+  const dayName = new Date(d.date + "T12:00:00Z").toLocaleDateString(undefined,
+    { timeZone: "UTC", weekday: "long", month: "short", day: "numeric" });
+  document.getElementById("day-title").textContent = `That day · ${dayName}`;
+
+  // Recovery
+  const r = d.recovery;
+  const recCol = el("div", {}, el("h3", {}, "Recovery"));
+  if (r && r.score != null) {
+    const band = r.score >= 67 ? "rec-green" : r.score >= 34 ? "rec-yellow" : "rec-red";
+    recCol.append(el("div", { class: "recovery" },
+      el("div", { class: `rec-score ${band}`, title: "WHOOP recovery: green 67+, yellow 34–66, red 0–33" }, `${Math.round(r.score)}%`),
+      kv([["HRV", `${fmtNum(r.hrv_ms)} ms`], ["Resting HR", `${fmtNum(r.resting_heart_rate)} bpm`],
+          ["Day strain", d.day_strain != null ? d.day_strain.toFixed(1) : "–"]])));
+  } else {
+    recCol.append(el("p", { class: "muted" }, r ? "Recovery isn't scored yet." : "No recovery recorded for this day."));
+  }
+
+  // Sleep
+  const s = d.sleep;
+  const sleepCol = el("div", {}, el("h3", {}, "Night before"));
+  if (s) {
+    sleepCol.append(kv([
+      ["Asleep", hm(s.hours_asleep)],
+      ["Performance", s.performance_pct != null ? `${Math.round(s.performance_pct)}%` : "–"],
+      ["Bed → wake", `${localTime(s.start_local)} → ${localTime(s.end_local)}`],
+    ]));
+    const total = s.deep_hours + s.rem_hours + s.light_hours + s.awake_hours;
+    if (total > 0) {
+      const part = (h, cls, label) => el("div", { class: cls, style: `width:${(100 * h / total).toFixed(1)}%`, title: `${label}: ${hm(h)}` });
+      sleepCol.append(
+        el("div", { class: "stages", role: "img", "aria-label": "Sleep stages" },
+          part(s.deep_hours, "st-deep", "Deep"), part(s.rem_hours, "st-rem", "REM"),
+          part(s.light_hours, "st-light", "Light"), part(s.awake_hours, "st-awake", "Awake")),
+        el("div", { class: "stage-legend" }, [["st-deep", "Deep", s.deep_hours], ["st-rem", "REM", s.rem_hours],
+          ["st-light", "Light", s.light_hours], ["st-awake", "Awake", s.awake_hours]]
+          .map(([c, n, h]) => el("span", {}, el("i", { class: c }), `${n} ${hm(h)}`))));
+    }
+  } else {
+    sleepCol.append(el("p", { class: "muted" }, "No sleep recorded."));
+  }
+
+  // Activities
+  const thisWorkout = run.whoop ? run.whoop.workout_id : null;
+  const actCol = el("div", {},
+    el("h3", {}, "Also that day"), activityList(d.activities, thisWorkout),
+    el("h3", {}, "Day before"),
+    d.previous_day ? activityList(d.previous_day.activities, null) : el("p", { class: "muted" }, "No data."));
+
+  box.append(sleepCol, recCol, actCol);  // night before -> that morning's recovery -> activities
+}
+
 let mapMarker = null;
 function moveMapMarker(dist) {
   if (!leafletMap || !paceData || !paceData.route.length) return;
@@ -486,6 +591,7 @@ function renderWhoop(run) {
     renderMap(run);
     renderSplits(run);
     renderWhoop(run);
+    renderDay(run);
     paceData = prepareChartData(run, samples);
     renderPaceChart(run);
     let resizeTimer;

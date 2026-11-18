@@ -9,7 +9,7 @@ import ipaddress
 import logging
 from contextlib import asynccontextmanager
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
@@ -31,6 +31,7 @@ from app.models import (
     WhoopSleep,
     WhoopWorkout,
 )
+from app.days import cycle_on, day_context, day_for_moment
 from app.matching import RUN_SPORTS, rebuild_matches
 from app.samsung.ingest import RunUpload, ingest_run
 from app.timefmt import ago, fmt_local
@@ -329,6 +330,8 @@ def get_run(run_id: str, route: bool = True) -> dict:
                 select(SamsungSplit).where(SamsungSplit.run_id == run_id).order_by(SamsungSplit.split_index)
             )
         ]
+        run_obj = row[0]
+        data["day"] = day_for_moment(s, run_obj.start)  # that morning's recovery, last night's sleep, etc.
         if route:
             data["route"] = [
                 [p.latitude, p.longitude, p.altitude_m, p.elapsed_ms, p.split_index]
@@ -352,6 +355,16 @@ def get_run_samples(run_id: str) -> dict:
             .order_by(SamsungSample.seq)
         ).all()
     return {"columns": ["elapsed_ms", "distance_m", "speed_mps"], "rows": [list(r) for r in rows]}
+
+
+@app.get("/api/days/{day}")
+def get_day(day: date) -> dict:
+    """One day (a WHOOP cycle): recovery, sleep, every activity, and the day before's activities."""
+    with SessionLocal() as s:
+        cycle = cycle_on(s, day)
+        if cycle is None:
+            raise HTTPException(404, f"No WHOOP data for {day.isoformat()}")
+        return day_context(s, cycle)
 
 
 # ---------- phone uploads ----------
