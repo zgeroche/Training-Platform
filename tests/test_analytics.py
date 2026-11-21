@@ -95,6 +95,33 @@ def test_readiness_factors_and_beats_per_mile():
     assert tue["beats_per_mile"] is None   # no WHOOP match, no heart rate
 
 
+def test_days_have_sleep_recovery_and_the_day_before():
+    from app.models import WhoopCycle, WhoopRecovery, WhoopSleep
+
+    _seed()
+    H = 3_600_000
+    with SessionLocal() as s:
+        s.add_all([
+            # Cycles labelled Tue Nov 17 and Wed Nov 18 (bedtimes Mon and Tue 10 PM MST).
+            WhoopCycle(id=2, start=datetime(2026, 11, 17, 5, 0), end=datetime(2026, 11, 18, 5, 0), strain=12.0,
+                       timezone_offset="-07:00", raw={}),
+            WhoopCycle(id=3, start=datetime(2026, 11, 18, 5, 0), end=None, strain=6.0, timezone_offset="-07:00", raw={}),
+            WhoopSleep(id="s3", cycle_id=3, start=datetime(2026, 11, 18, 5, 0), end=datetime(2026, 11, 18, 12, 0),
+                       total_light_sleep_time_milli=3 * H, total_slow_wave_sleep_time_milli=H,
+                       total_rem_sleep_time_milli=2 * H, raw={}),
+            WhoopRecovery(cycle_id=3, sleep_id="s3", recovery_score=40, hrv_rmssd_milli=33.0, resting_heart_rate=64, raw={}),
+            WhoopWorkout(id="pb", sport_name="pickleball", start=datetime(2026, 11, 18, 2, 0),
+                         end=datetime(2026, 11, 18, 3, 0), raw={}),  # Tue 7 PM MST, in cycle 2
+        ])
+        s.commit()
+        a = analytics(s, "training", TODAY)
+    wed = next(d for d in a["days"] if d["date"] == "2026-11-18")
+    assert wed["recovery"] == 40 and wed["sleep_hours"] == 6.0 and wed["day_strain"] == 6.0
+    assert wed["prev_day_strain"] == 12.0
+    assert wed["prev_day_runs"] == [{"distance_mi": 3.0, "effort": "tempo", "estimated_effort": None}]  # Tuesday's run
+    assert wed["prev_day_other_activities"] == ["pickleball"]
+
+
 def test_effort_estimate_rule():
     from app.analytics import estimate_effort
 

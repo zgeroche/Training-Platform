@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.calendar_data import MILE_M, _samsung_local
+from app.days import cycle_day
 from app.models import (
     PlanPhase,
     RunMatch,
@@ -160,10 +161,19 @@ def analytics(session: Session, window: str, today: date) -> dict:
     tempo_hr = tempo_hr_threshold(session)
 
     runs = []
+    day_before_runs: list[dict] = []  # runs on the day before the window, for its first day's "day before"
     for run, avg_hr in rows:
         local = _samsung_local(run)
         d = local.date()
-        if d < start or d > today or not run.distance_m or not run.duration_ms:
+        if d > today or not run.distance_m or not run.duration_ms:
+            continue
+        if d < start:
+            if d == start - timedelta(days=1):
+                prev_plan = plans_between(session, d, d)[d]
+                miles = run.distance_m / MILE_M
+                effort = prev_plan["effort"] if prev_plan and prev_plan["kind"] == "run" and prev_plan["effort"] else UNLABELED
+                day_before_runs.append({"date": d.isoformat(), "distance_mi": round(miles, 2), "effort": effort,
+                                        "estimated_effort": estimate_effort(miles, avg_hr, tempo_hr) if effort == UNLABELED else None})
             continue
         plan = plans.get(d)
         planned_run = plan is not None and plan["kind"] == "run"
@@ -202,6 +212,37 @@ def analytics(session: Session, window: str, today: date) -> dict:
         })
         week_start += timedelta(days=7)
 
+    # One entry per WHOOP day (cycle) in the window, runs or not: sleep, recovery, strain, and the day before.
+    runs_on: dict[str, list[dict]] = {}
+    for r in day_before_runs + runs:
+        runs_on.setdefault(r["date"], []).append(
+            {"distance_mi": r["distance_mi"], "effort": r["effort"], "estimated_effort": r["estimated_effort"]})
+    days = []
+    for i, cycle in enumerate(whoop.cycles):
+        d = cycle_day(cycle)
+        if d < start or d > today:
+            continue
+        rec = whoop.recovery.get(cycle.id)
+        sleep = whoop.sleep.get(rec.sleep_id) if rec and rec.sleep_id else None
+        asleep_ms = sum(v or 0 for v in (
+            sleep.total_light_sleep_time_milli, sleep.total_slow_wave_sleep_time_milli, sleep.total_rem_sleep_time_milli
+        )) if sleep else 0
+        prev = whoop.cycles[i - 1] if i > 0 else None
+        prev_date = (d - timedelta(days=1)).isoformat()
+        prev_acts = whoop._activities(prev.start, prev.end or cycle.start) if prev else []
+        days.append({
+            "date": d.isoformat(),
+            "recovery": rec.recovery_score if rec else None,
+            "hrv_ms": rec.hrv_rmssd_milli if rec else None,
+            "resting_heart_rate": rec.resting_heart_rate if rec else None,
+            "sleep_hours": round(asleep_ms / MS_PER_HOUR, 2) if asleep_ms else None,
+            "sleep_performance": sleep.sleep_performance_percentage if sleep else None,
+            "day_strain": cycle.strain,
+            "prev_day_strain": prev.strain if prev else None,
+            "prev_day_runs": runs_on.get(prev_date, []),
+            "prev_day_other_activities": [a for a in prev_acts if a not in ("running", "stroller_jogging")],
+        })
+
     by_effort = {e: _summary([r for r in runs if r["effort"] == e]) for e in (*EFFORTS, UNLABELED)}
     return {
         "window": window,
@@ -212,4 +253,5 @@ def analytics(session: Session, window: str, today: date) -> dict:
         "estimate_rule": {"long_run_mi": LONG_RUN_MI, "tempo_hr": tempo_hr},
         "runs": runs,
         "weeks": weeks,
+        "days": days,
     }

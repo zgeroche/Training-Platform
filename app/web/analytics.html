@@ -52,6 +52,17 @@
   @media (max-width: 1000px) { .factor-grid { grid-template-columns: minmax(0, 1fr); } }
   .factor-grid table td, .factor-grid table th { padding: 6px 8px; }
   .factor-grid tr.thin td { color: var(--muted); }
+  /* Rest days get their own hue: they're the baseline the run days are compared with. */
+  :root { --cat-rest: #0284c7; --cat-other: #db2777; }
+  @media (prefers-color-scheme: dark) { :root { --cat-rest: #38bdf8; --cat-other: #f472b6; } }
+  .after-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) 96px; gap: 10px; align-items: center;
+               margin: 8px 0; font-size: 14px; }
+  .after-row.thin { opacity: .55; }
+  .after-track { position: relative; height: 14px; background: var(--line); border-radius: 7px; }
+  .after-bar { height: 100%; border-radius: 7px; }
+  .after-avg { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--fg); opacity: .7; }
+  .after-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .after-val small { color: var(--muted); font-weight: 400; }
   .better { color: var(--better); font-weight: 600; }
   .worse { color: var(--worse); font-weight: 600; }
 </style>
@@ -107,12 +118,48 @@
     <div class="panel"><h2>The day before</h2><div id="f-prev"></div></div>
   </section>
   <section class="charts">
-    <div class="panel chart wide">
+    <div class="panel chart">
       <div class="chart-head"><h2>Pace vs recovery</h2><div class="legend" data-legend></div></div>
       <div id="chart-recovery"></div>
       <p class="note">Each dot is a run: recovery that morning across, pace compared with your usual for that effort up and down
         (above the dashed line is faster than usual). The line is the overall trend.</p>
     </div>
+    <div class="panel chart">
+      <div class="chart-head"><h2>Pace vs sleep</h2><div class="legend" data-legend></div></div>
+      <div id="chart-sleep"></div>
+      <p class="note">Each dot is a run: hours asleep the night before across, pace compared with your usual for that effort up and down.</p>
+    </div>
+  </section>
+
+  <h2 class="section">Sleep &amp; recovery (WHOOP)</h2>
+  <p class="muted" style="margin:0">One point per WHOOP day in this window, whether you ran or not, colored by what you did the day before.
+    Click a point to open that month in the training calendar.</p>
+  <section class="charts">
+    <div class="panel chart wide">
+      <div class="chart-head"><h2>Sleep vs recovery</h2><div class="legend" id="legend-sleep-rec"></div></div>
+      <div id="chart-sleep-rec"></div>
+      <p class="note">Hours asleep across, recovery that morning up. The line is the overall trend; the colors show whether
+        a hard day before pulls recovery down at the same amount of sleep.</p>
+    </div>
+    <div class="panel chart">
+      <div class="chart-head"><h2>Recovery the morning after…</h2></div>
+      <div id="recovery-after"></div>
+    </div>
+    <div class="panel chart">
+      <div class="chart-head"><h2>Strain vs next-day recovery</h2></div>
+      <div id="chart-strain-rec"></div>
+      <p class="note">WHOOP day strain across (0–21), the next morning's recovery up, colored by the day's main activity.</p>
+    </div>
+    <div class="panel chart">
+      <div class="chart-head"><h2>HRV</h2><span class="muted" style="font-size:12px">7-day average line · higher is better</span></div>
+      <div id="chart-hrv"></div>
+    </div>
+    <div class="panel chart">
+      <div class="chart-head"><h2>Resting heart rate</h2><span class="muted" style="font-size:12px">7-day average line · lower is better</span></div>
+      <div id="chart-rhr"></div>
+    </div>
+    <p class="note wide" style="margin-top:-8px">As aerobic fitness builds over a training block, resting heart rate tends to drift down and
+      HRV up. A sudden swing in either for several days is a common early sign of fatigue or illness.</p>
   </section>
 
   <h2 class="section">Aerobic efficiency</h2>
@@ -225,7 +272,7 @@ function renderLegends() {
  *  invert (smaller y at the top), fmtY, trend: "effort" | "all", zeroLine. */
 function scatter(id, opts) {
   const box = document.getElementById(id);
-  const runs = data.runs.filter((r) => opts.y(r) != null && opts.x(r) != null);
+  const runs = (opts.items || data.runs).filter((r) => opts.y(r) != null && opts.x(r) != null);
   if (!runs.length) { box.replaceChildren(el("p", { class: "muted" }, opts.empty || "No runs in this window.")); return; }
   const W = Math.max(320, box.clientWidth), H = opts.height || 300, m = { l: 56, r: 14, t: 12, b: 28 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
@@ -250,7 +297,17 @@ function scatter(id, opts) {
   }
   if (opts.topLabel) svg.append(svgEl("text", { x: 4, y: m.t + 10 }, opts.topLabel), svgEl("text", { x: 4, y: m.t + ih }, opts.bottomLabel));
 
+  // Points default to runs (colored by effort, hollow if estimated, click opens the run);
+  // days pass their own color / title / href.
+  const colorOf = opts.color || ((r) => css(`--${r.eff}`));
+  const hollow = opts.hollow || ((r) => r.isEstimate);
+  const titleOf = opts.title || ((r) => `${shortDate(dayMs(r.date), true)} · ${LABEL[r.eff]}${r.isEstimate ? " (est.)" : ""} · ` +
+    `${r.distance_mi.toFixed(2)} mi · ${fmtPace(r.pace_sec_per_mile)} /mi` +
+    (r.average_heart_rate ? ` · ${r.average_heart_rate} bpm` : "") + (opts.tip ? ` · ${opts.tip(r)}` : ""));
+  const hrefOf = opts.href || ((r) => `/runs/${r.id}`);
+
   const groups = opts.trend === "all" ? [["all", runs, css("--fg")]]
+    : opts.trend === "none" ? []
     : EFFORTS.map(([k]) => [k, runs.filter((r) => r.eff === k), css(`--${k}`)]);
   for (const [, rs, color] of groups) {
     if (rs.length < 3) continue;
@@ -261,16 +318,131 @@ function scatter(id, opts) {
     svg.append(svgEl("line", { x1: xOf(xa), y1: yOf(f(xa)), x2: xOf(xb), y2: yOf(f(xb)), class: "trend", stroke: color }));
   }
   for (const r of runs) {
-    const color = css(`--${r.eff}`);
-    const dot = svgEl("circle", { cx: xOf(opts.x(r)), cy: yOf(opts.y(r)), r: 5, class: "dot",
-      fill: r.isEstimate ? "none" : color, stroke: r.isEstimate ? color : css("--surface") });
-    dot.append(svgEl("title", {}, `${shortDate(dayMs(r.date), true)} · ${LABEL[r.eff]}${r.isEstimate ? " (est.)" : ""} · ` +
-      `${r.distance_mi.toFixed(2)} mi · ${fmtPace(r.pace_sec_per_mile)} /mi` +
-      (r.average_heart_rate ? ` · ${r.average_heart_rate} bpm` : "") + (opts.tip ? ` · ${opts.tip(r)}` : "")));
-    dot.addEventListener("click", () => { location.href = `/runs/${r.id}`; });
+    const color = colorOf(r);
+    const dot = svgEl("circle", { cx: xOf(opts.x(r)), cy: yOf(opts.y(r)), r: opts.radius || 5, class: "dot",
+      fill: hollow(r) ? "none" : color, stroke: hollow(r) ? color : css("--surface") });
+    dot.append(svgEl("title", {}, titleOf(r)));
+    dot.addEventListener("click", () => { location.href = hrefOf(r); });
     svg.append(dot);
   }
   box.replaceChildren(svg);
+}
+
+// ---------- WHOOP days ----------
+
+const DAY_CATS = [["rest", "Rest day"], ["easy", "Easy run"], ["tempo", "Tempo run"], ["race_pace", "Race-pace run"],
+                  ["unlabeled", "Run (no effort)"], ["other", "Other activity only"]];
+const DAY_CAT_LABEL = Object.fromEntries(DAY_CATS);
+
+/** What the day before a WHOOP day was: its longest run's effort, else other activity, else rest. */
+function dayBefore(d) {
+  const runs = d.prev_day_runs || [];
+  if (runs.length) {
+    const r = runs.reduce((a, b) => (b.distance_mi > a.distance_mi ? b : a));
+    if (r.effort !== "unlabeled") return r.effort;
+    return useEstimates && r.estimated_effort ? r.estimated_effort : "unlabeled";
+  }
+  return (d.prev_day_other_activities || []).length ? "other" : "rest";
+}
+const catColor = (k) => css(`--cat-${k}`) || css(`--${k}`);
+
+function dayTitle(d) {
+  const runs = d.prev_day_runs || [];
+  const before = runs.length ? `${DAY_CAT_LABEL[d.cat]} (${runs.map((r) => `${r.distance_mi.toFixed(1)} mi`).join(" + ")})`
+    : DAY_CAT_LABEL[d.cat];
+  const others = (d.prev_day_other_activities || []).map((a) => a.replace(/[-_]/g, " "));
+  return `${shortDate(dayMs(d.date), true)} · recovery ${d.recovery != null ? Math.round(d.recovery) + "%" : "–"}` +
+    (d.sleep_hours != null ? ` · slept ${d.sleep_hours.toFixed(1)} h` : "") +
+    ` · day before: ${before}${others.length && runs.length ? ` + ${others.join(", ")}` : others.length ? `: ${others.join(", ")}` : ""}` +
+    (d.prev_day_strain != null ? ` · strain ${d.prev_day_strain.toFixed(1)}` : "");
+}
+
+function dayLegend(id) {
+  const present = new Set(data.days.map((d) => d.cat));
+  document.getElementById(id).replaceChildren(...DAY_CATS.filter(([k]) => present.has(k))
+    .map(([k, label]) => el("span", {}, el("i", { style: `background:${catColor(k)}` }), label)));
+}
+
+function recoveryAfter() {
+  const box = document.getElementById("recovery-after");
+  const rows = DAY_CATS.map(([k, label]) => {
+    const ds = data.days.filter((d) => d.cat === k && d.recovery != null);
+    return { k, label, n: ds.length, avg: ds.length ? ds.reduce((s, d) => s + d.recovery, 0) / ds.length : null };
+  }).filter((r) => r.n);
+  if (!rows.length) { box.replaceChildren(el("p", { class: "muted" }, "No recovery data in this window.")); return; }
+  const all = data.days.filter((d) => d.recovery != null);
+  const overall = all.reduce((s, d) => s + d.recovery, 0) / all.length;
+  box.replaceChildren(
+    ...rows.map((r) => el("div", { class: `after-row${r.n < 3 ? " thin" : ""}`, title: r.n < 3 ? "Fewer than 3 days: too few to read much into" : "" },
+      el("span", { class: "after-label" }, r.label),
+      el("div", { class: "after-track" },
+        el("div", { class: "after-bar", style: `width:${r.avg.toFixed(1)}%;background:${catColor(r.k)}` }),
+        el("div", { class: "after-avg", style: `left:${overall.toFixed(1)}%`, title: `Average of all days: ${Math.round(overall)}%` })),
+      el("span", { class: "after-val" }, `${Math.round(r.avg)}%`, el("small", {}, ` · ${r.n} day${r.n === 1 ? "" : "s"}`)))),
+    el("p", { class: "note" }, `The thin line marks your average recovery across all ${all.length} days (${Math.round(overall)}%).`));
+}
+
+/** Daily values (faint dots) with a 7-day trailing average line. */
+function trendLine(id, value, { fmt, betterUp, label }) {
+  const box = document.getElementById(id);
+  const pts = data.days.filter((d) => value(d) != null).map((d) => ({ x: dayMs(d.date), y: value(d), d }))
+    .sort((a, b) => a.x - b.x);
+  if (pts.length < 2) { box.replaceChildren(el("p", { class: "muted" }, "Not enough WHOOP days in this window.")); return; }
+  const W = Math.max(320, box.clientWidth), H = 220, m = { l: 48, r: 14, t: 12, b: 28 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const x0 = dayMs(data.start), x1 = Math.max(dayMs(data.end), x0 + DAY_MS);
+  const ys = pts.map((p) => p.y).sort((a, b) => a - b);
+  let lo = quantile(ys, 0.01), hi = quantile(ys, 0.99);
+  const pad = Math.max((hi - lo) * 0.1, 2); lo -= pad; hi += pad;
+  const xOf = (v) => m.l + ((v - x0) / (x1 - x0)) * iw;
+  const yOf = (v) => m.t + (1 - (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo)) * ih;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": label });
+  const step = [1, 2, 5, 10, 20].find((s) => (hi - lo) / s <= 5) || 20;
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    svg.append(svgEl("line", { x1: m.l, x2: W - m.r, y1: yOf(v), y2: yOf(v), class: "grid" }),
+               svgEl("text", { x: m.l - 8, y: yOf(v) + 4, "text-anchor": "end" }, fmt(v)));
+  }
+  for (const [t, lbl] of timeAxis().xTicks()) {
+    svg.append(svgEl("text", { x: xOf(t), y: H - 8, "text-anchor": "middle" }, lbl));
+  }
+  svg.append(svgEl("text", { x: 4, y: betterUp ? m.t + 10 : m.t + ih }, "better"));
+  for (const p of pts) {
+    const c = svgEl("circle", { cx: xOf(p.x), cy: yOf(p.y), r: 2.5, fill: css("--accent"), opacity: 0.35 });
+    c.append(svgEl("title", {}, `${shortDate(p.x, true)}: ${fmt(p.y)}`));
+    svg.append(c);
+  }
+  let path = "";
+  pts.forEach((p, i) => {
+    const win = pts.filter((q) => q.x <= p.x && q.x > p.x - 7 * DAY_MS);
+    const avg = win.reduce((s, q) => s + q.y, 0) / win.length;
+    path += `${i ? "L" : "M"}${xOf(p.x).toFixed(1)},${yOf(avg).toFixed(1)} `;
+  });
+  svg.append(svgEl("path", { d: path, class: "trend", stroke: css("--accent") }));
+  box.replaceChildren(svg);
+}
+
+function renderDays() {
+  for (const d of data.days) d.cat = dayBefore(d);
+  dayLegend("legend-sleep-rec");
+  scatter("chart-sleep-rec", {
+    items: data.days, label: "Sleep vs recovery", height: 320,
+    x: (d) => d.sleep_hours, xRange: (ds) => [Math.max(0, Math.floor(Math.min(...ds.map((d) => d.sleep_hours)))), Math.ceil(Math.max(...ds.map((d) => d.sleep_hours)))],
+    xTicks: (a, b) => { const t = []; for (let h = Math.ceil(a); h <= b; h++) t.push([h, `${h} h`]); return t; },
+    y: (d) => d.recovery, ySteps: [10, 20], fmtY: (v) => `${Math.round(v)}%`, trend: "all", radius: 4.5,
+    color: (d) => catColor(d.cat), hollow: () => false, title: dayTitle,
+    href: (d) => `/training#${d.date.slice(0, 7)}`, empty: "No nights with both sleep and recovery in this window.",
+  });
+  recoveryAfter();
+  scatter("chart-strain-rec", {
+    items: data.days, label: "Strain vs next-day recovery", height: 300,
+    x: (d) => d.prev_day_strain, xRange: () => [0, 21],
+    xTicks: () => [0, 3, 6, 9, 12, 15, 18, 21].map((v) => [v, String(v)]),
+    y: (d) => d.recovery, ySteps: [10, 20], fmtY: (v) => `${Math.round(v)}%`, trend: "all", radius: 4.5,
+    color: (d) => catColor(d.cat), hollow: () => false, title: dayTitle,
+    href: (d) => `/training#${d.date.slice(0, 7)}`, empty: "No WHOOP days in this window.",
+  });
+  trendLine("chart-hrv", (d) => d.hrv_ms, { fmt: (v) => `${Math.round(v)} ms`, betterUp: true, label: "HRV over time" });
+  trendLine("chart-rhr", (d) => d.resting_heart_rate, { fmt: (v) => `${Math.round(v)}`, betterUp: false, label: "Resting heart rate over time" });
 }
 
 function timeAxis() {
@@ -405,6 +577,17 @@ function renderAll() {
     tip: (r) => `recovery ${Math.round(r.factors.recovery)}%`,
     empty: "Not enough runs per effort in this window to compare (each effort needs 2+ runs).",
   });
+  scatter("chart-sleep", {
+    label: "Pace vs sleep", height: 280, x: (r) => (r.factors || {}).sleep_hours,
+    xRange: (rs) => [Math.max(0, Math.floor(Math.min(...rs.map((r) => r.factors.sleep_hours)))),
+                     Math.ceil(Math.max(...rs.map((r) => r.factors.sleep_hours)))],
+    xTicks: (a, b) => { const t = []; for (let h = Math.ceil(a); h <= b; h++) t.push([h, `${h} h`]); return t; },
+    y: (r) => r.paceDelta, invert: true, zeroLine: true, minSpan: 20, ySteps: [10, 15, 30, 60],
+    fmtY: (v) => (v === 0 ? "usual" : signed(-v, "s")), trend: "all", topLabel: "faster", bottomLabel: "slower",
+    tip: (r) => `slept ${r.factors.sleep_hours.toFixed(1)} h`,
+    empty: "Not enough runs per effort in this window to compare (each effort needs 2+ runs).",
+  });
+  renderDays();
   scatter("chart-bpm", { ...t, label: "Heartbeats per mile", y: (r) => r.beats_per_mile, invert: true, minSpan: 100,
     ySteps: [25, 50, 100, 200], fmtY: (v) => `${Math.round(v)}`, trend: "effort", topLabel: "fitter", bottomLabel: "",
     tip: (r) => `${r.beats_per_mile} beats/mi`, empty: "No runs with WHOOP heart rate in this window." });
