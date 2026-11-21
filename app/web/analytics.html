@@ -7,38 +7,53 @@
 <link rel="stylesheet" href="/static/style.css">
 <style>
   /* Effort colors are shared by cards, dots and trend lines. */
-  :root { --easy: #0d9488; --race_pace: #7c3aed; --tempo: #ea580c; --unlabeled: #94a3b8; }
-  @media (prefers-color-scheme: dark) { :root { --easy: #2dd4bf; --race_pace: #a78bfa; --tempo: #fb923c; --unlabeled: #64748b; } }
+  :root { --easy: #0d9488; --race_pace: #7c3aed; --tempo: #ea580c; --unlabeled: #94a3b8;
+          --better: #15803d; --worse: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --easy: #2dd4bf; --race_pace: #a78bfa; --tempo: #fb923c; --unlabeled: #64748b;
+          --better: #4ade80; --worse: #f87171; } }
   .page { max-width: 1400px; }
   .head { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; justify-content: space-between; }
+  .controls { display: grid; gap: 8px; justify-items: end; }
   .windows { display: flex; flex-wrap: wrap; gap: 6px; }
   .windows button { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
                     background: var(--surface); color: var(--fg); cursor: pointer; }
   .windows button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .toggle { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
   .card { border-top: 3px solid var(--c, var(--line)); display: grid; gap: 6px; }
   .card h2 { margin: 0; font-size: 14px; display: flex; justify-content: space-between; align-items: baseline; }
   .card h2 .n { color: var(--muted); font-weight: 400; font-size: 13px; }
   .card .big { font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
   .card .big small { font-size: 13px; color: var(--muted); font-weight: 400; }
-  .card .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
-  .card .kv span:nth-child(odd) { color: var(--muted); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
   .card.empty { opacity: .55; }
   .charts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
   @media (max-width: 1000px) { .charts { grid-template-columns: minmax(0, 1fr); } }
   .chart-head { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; align-items: baseline; }
+  .chart-head h2 { margin-bottom: 4px; }
   .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
   .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .legend i.est { background: none !important; border: 2px solid var(--muted); width: 6px; height: 6px; }
   .chart svg { display: block; width: 100%; height: auto; }
   .chart text { fill: var(--muted); font: 11px var(--font); font-variant-numeric: tabular-nums; }
   .grid { stroke: var(--line); }
-  .dot { stroke: var(--surface); stroke-width: 1.5; cursor: pointer; }
+  .zero { stroke: var(--muted); stroke-dasharray: 4 3; }
+  .dot { stroke-width: 1.5; cursor: pointer; }
   .dot:hover { stroke: var(--fg); }
   .trend { fill: none; stroke-width: 2.5; stroke-linecap: round; opacity: .85; }
   .bar { fill: var(--accent); opacity: .85; }
   .plan-mark { stroke: var(--fg); stroke-width: 2; stroke-dasharray: 3 2; }
   .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
   .wide { grid-column: 1 / -1; }
+  h2.section { font-size: 1.15rem; margin: 8px 0 -4px; }
+  .factor-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+  @media (max-width: 1000px) { .factor-grid { grid-template-columns: minmax(0, 1fr); } }
+  .factor-grid table td, .factor-grid table th { padding: 6px 8px; }
+  .factor-grid tr.thin td { color: var(--muted); }
+  .better { color: var(--better); font-weight: 600; }
+  .worse { color: var(--worse); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -50,12 +65,15 @@
       <h1>Analytics</h1>
       <p class="sub" id="range">Loading…</p>
     </div>
-    <div class="windows" role="group" aria-label="Time window">
-      <button type="button" data-w="4w">4 weeks</button>
-      <button type="button" data-w="3m">3 months</button>
-      <button type="button" data-w="6m">6 months</button>
-      <button type="button" data-w="training">Since training started</button>
-      <button type="button" data-w="all">All</button>
+    <div class="controls">
+      <div class="windows" role="group" aria-label="Time window">
+        <button type="button" data-w="4w">4 weeks</button>
+        <button type="button" data-w="3m">3 months</button>
+        <button type="button" data-w="6m">6 months</button>
+        <button type="button" data-w="training">Since training started</button>
+        <button type="button" data-w="all">All</button>
+      </div>
+      <label class="toggle" id="est-label"><input type="checkbox" id="est"> Estimate effort for unlabeled runs</label>
     </div>
   </div>
 
@@ -63,14 +81,14 @@
 
   <section class="charts">
     <div class="panel chart">
-      <div class="chart-head"><h2>Pace over time</h2><div class="legend" id="legend-pace"></div></div>
+      <div class="chart-head"><h2>Pace over time</h2><div class="legend" data-legend></div></div>
       <div id="chart-pace"></div>
       <p class="note">Each dot is a run (click to open it). Faster is higher. Lines show the trend for each effort with 3 or more runs.</p>
     </div>
     <div class="panel chart">
-      <div class="chart-head"><h2>Distance over time</h2><div class="legend" id="legend-dist"></div></div>
+      <div class="chart-head"><h2>Distance over time</h2><div class="legend" data-legend></div></div>
       <div id="chart-dist"></div>
-      <p class="note">Each dot is a run, colored by its planned effort.</p>
+      <p class="note">Each dot is a run, colored by its effort.</p>
     </div>
     <div class="panel chart wide">
       <div class="chart-head"><h2>Weekly miles</h2>
@@ -79,15 +97,48 @@
       <div id="chart-weeks"></div>
     </div>
   </section>
+
+  <h2 class="section">Readiness: how your runs went, by how you came into them</h2>
+  <p class="muted" style="margin:0">Each run is compared with your average pace and heart rate <b>for the same effort</b> in this window,
+    so an easy run is measured against your easy runs. Green means faster (or a lower heart rate) than usual.</p>
+  <section class="factor-grid">
+    <div class="panel"><h2>Recovery that morning</h2><div id="f-recovery"></div></div>
+    <div class="panel"><h2>Sleep the night before</h2><div id="f-sleep"></div></div>
+    <div class="panel"><h2>The day before</h2><div id="f-prev"></div></div>
+  </section>
+  <section class="charts">
+    <div class="panel chart wide">
+      <div class="chart-head"><h2>Pace vs recovery</h2><div class="legend" data-legend></div></div>
+      <div id="chart-recovery"></div>
+      <p class="note">Each dot is a run: recovery that morning across, pace compared with your usual for that effort up and down
+        (above the dashed line is faster than usual). The line is the overall trend.</p>
+    </div>
+  </section>
+
+  <h2 class="section">Aerobic efficiency</h2>
+  <section class="charts">
+    <div class="panel chart wide">
+      <div class="chart-head"><h2>Heartbeats per mile</h2><div class="legend" data-legend></div></div>
+      <div id="chart-bpm"></div>
+      <p class="note">Average heart rate × minutes per mile: how many heartbeats a mile costs you. Lower is fitter, and a falling
+        line at the same effort means you're covering ground more cheaply. WHOOP's average heart rate includes a few minutes after you
+        stop, so single runs are a little noisy; the trend matters more.</p>
+      <p class="note" id="bpm-caveat" hidden>With estimated efforts on, Easy vs Tempo is partly decided by heart rate, so heartbeats
+        per mile by effort is biased for estimated runs. Read efficiency trends from planned (solid) runs.</p>
+    </div>
+  </section>
 </main>
 
 <script src="/static/common.js"></script>
 <script>
 const EFFORTS = [["easy", "Easy"], ["race_pace", "Race pace"], ["tempo", "Tempo"], ["unlabeled", "Unlabeled"]];
+const LABEL = Object.fromEntries(EFFORTS);
 const NS = "http://www.w3.org/2000/svg";
 const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const DAY_MS = 86400000;
 let data = null;
+let useEstimates = false;
+try { useEstimates = localStorage.getItem("analytics.estimates") === "1"; } catch (e) { /* ignore */ }
 
 function svgEl(tag, attrs, text) {
   const n = document.createElementNS(NS, tag);
@@ -98,6 +149,7 @@ function svgEl(tag, attrs, text) {
 const dayMs = (iso) => Date.parse(iso + "T00:00:00Z");
 const shortDate = (ms, withYear) => new Date(ms).toLocaleDateString(undefined,
   { timeZone: "UTC", month: "short", day: "numeric", ...(withYear ? { year: "2-digit" } : {}) });
+const quantile = (s, q) => s[Math.min(s.length - 1, Math.max(0, Math.round(q * (s.length - 1))))];
 
 function linearFit(points) {  // least squares y = a + b x
   const n = points.length;
@@ -108,94 +160,138 @@ function linearFit(points) {  // least squares y = a + b x
   return (x) => my + b * (x - mx);
 }
 
-function quantile(sorted, q) { return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))]; }
+// ---------- effort (planned, or estimated when the toggle is on) ----------
+
+function prepare() {
+  for (const r of data.runs) {
+    r.isEstimate = r.effort === "unlabeled" && useEstimates && !!r.estimated_effort;
+    r.eff = r.isEstimate ? r.estimated_effort : r.effort;
+  }
+  // Usual pace and heart rate per effort in this window, for readiness deltas. This is the plain
+  // average of the runs' paces (not distance-weighted like the cards), so that the run-by-run
+  // differences average out to zero across all runs of an effort.
+  usual = {};
+  for (const [k] of EFFORTS) {
+    const rs = data.runs.filter((r) => r.eff === k);
+    const hrs = rs.filter((r) => r.average_heart_rate != null);
+    usual[k] = {
+      n: rs.length,
+      pace: rs.length ? rs.reduce((s, r) => s + r.pace_sec_per_mile, 0) / rs.length : null,
+      hr: hrs.length ? hrs.reduce((s, r) => s + r.average_heart_rate, 0) / hrs.length : null,
+    };
+  }
+  for (const r of data.runs) {
+    const u = usual[r.eff];
+    r.paceDelta = u.n >= 2 && u.pace ? r.pace_sec_per_mile - u.pace : null;  // negative = faster than usual
+    r.hrDelta = u.n >= 2 && u.hr != null && r.average_heart_rate != null ? r.average_heart_rate - u.hr : null;
+  }
+}
+let usual = {};
+
+function summary(rs) {
+  const miles = rs.reduce((s, r) => s + r.distance_mi, 0);
+  const secs = rs.reduce((s, r) => s + r.duration_ms / 1000, 0);
+  const hrs = rs.filter((r) => r.average_heart_rate != null);
+  return { runs: rs.length, miles, avgDist: rs.length ? miles / rs.length : null, pace: miles ? secs / miles : null,
+           hr: hrs.length ? Math.round(hrs.reduce((s, r) => s + r.average_heart_rate, 0) / hrs.length) : null,
+           est: rs.filter((r) => r.isEstimate).length };
+}
 
 function renderCards() {
-  const card = (key, label, s, color) => {
-    const pace = s.avg_pace_sec_per_mile;
-    return el("div", { class: `panel card${s.runs ? "" : " empty"}`, style: `--c:${color}` },
-      el("h2", {}, label, el("span", { class: "n" }, `${s.runs} run${s.runs === 1 ? "" : "s"}`)),
-      el("div", { class: "big" }, pace ? fmtPace(pace) : "–", el("small", {}, " /mi avg pace")),
-      el("div", { class: "kv" },
-        el("span", {}, "Avg distance"), el("span", {}, s.avg_distance_mi != null ? `${s.avg_distance_mi.toFixed(2)} mi` : "–"),
-        el("span", {}, "Total"), el("span", {}, `${s.miles.toFixed(1)} mi`),
-        el("span", {}, "Avg HR"), el("span", {}, s.avg_heart_rate != null ? `${s.avg_heart_rate} bpm` : "–")));
-  };
+  const card = (label, s, color) => el("div", { class: `panel card${s.runs ? "" : " empty"}`, style: `--c:${color}` },
+    el("h2", {}, label, el("span", { class: "n" },
+      `${s.runs} run${s.runs === 1 ? "" : "s"}${s.est ? ` (${s.est} est.)` : ""}`)),
+    el("div", { class: "big" }, s.pace ? fmtPace(s.pace) : "–", el("small", {}, " /mi avg pace")),
+    el("div", { class: "kv" },
+      el("span", {}, "Avg distance"), el("span", {}, s.avgDist != null ? `${s.avgDist.toFixed(2)} mi` : "–"),
+      el("span", {}, "Total"), el("span", {}, `${s.miles.toFixed(1)} mi`),
+      el("span", {}, "Avg HR"), el("span", {}, s.hr != null ? `${s.hr} bpm` : "–")));
   document.getElementById("cards").replaceChildren(
-    card("overall", "All runs", data.overall, "var(--accent)"),
-    ...EFFORTS.map(([k, label]) => card(k, label, data.by_effort[k], `var(--${k})`)));
+    card("All runs", summary(data.runs), "var(--accent)"),
+    ...EFFORTS.map(([k, label]) => card(label, summary(data.runs.filter((r) => r.eff === k)), `var(--${k})`)));
 }
 
-function legend(id) {
-  const present = new Set(data.runs.map((r) => r.effort));
-  document.getElementById(id).replaceChildren(...EFFORTS.filter(([k]) => present.has(k))
-    .map(([k, label]) => el("span", {}, el("i", { style: `background:var(--${k})` }), label)));
+function renderLegends() {
+  const present = new Set(data.runs.map((r) => r.eff));
+  const items = EFFORTS.filter(([k]) => present.has(k))
+    .map(([k, label]) => el("span", {}, el("i", { style: `background:var(--${k})` }), label));
+  if (data.runs.some((r) => r.isEstimate)) items.push(el("span", {}, el("i", { class: "est" }), "estimated"));
+  document.querySelectorAll("[data-legend]").forEach((box) => box.replaceChildren(...items.map((n) => n.cloneNode(true))));
 }
 
-/** Scatter of runs over time with per-effort trend lines. */
-function scatter(id, value, { invert = false, fmt, pad = 0.08 }) {
+// ---------- charts ----------
+
+/** Scatter of runs. opts: x(r) -> number, xTicks(x0, x1) -> [[value, label]], y(r) -> number,
+ *  invert (smaller y at the top), fmtY, trend: "effort" | "all", zeroLine. */
+function scatter(id, opts) {
   const box = document.getElementById(id);
-  const runs = data.runs.filter((r) => value(r) != null);
-  if (!runs.length) { box.replaceChildren(el("p", { class: "muted" }, "No runs in this window.")); return; }
-  const W = Math.max(320, box.clientWidth), H = 300, m = { l: 52, r: 14, t: 12, b: 28 };
+  const runs = data.runs.filter((r) => opts.y(r) != null && opts.x(r) != null);
+  if (!runs.length) { box.replaceChildren(el("p", { class: "muted" }, opts.empty || "No runs in this window.")); return; }
+  const W = Math.max(320, box.clientWidth), H = opts.height || 300, m = { l: 56, r: 14, t: 12, b: 28 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
-  const x0 = dayMs(data.start), x1 = Math.max(dayMs(data.end), x0 + DAY_MS);
-  const vals = runs.map(value).sort((a, b) => a - b);
-  let lo = quantile(vals, 0.02), hi = quantile(vals, 0.98);  // ignore a stray outlier when scaling
-  const span = Math.max(hi - lo, invert ? 30 : 1);
-  lo -= span * pad; hi += span * pad;
-  const xOf = (ms) => m.l + ((ms - x0) / (x1 - x0)) * iw;
-  const yOf = (v) => {
-    const c = Math.min(hi, Math.max(lo, v)), f = (c - lo) / (hi - lo);
-    return m.t + (invert ? f : 1 - f) * ih;
-  };
-  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${id.replace("chart-", "")} over time` });
+  const [x0, x1] = opts.xRange(runs);
+  const ys = runs.map(opts.y).sort((a, b) => a - b);
+  let lo = quantile(ys, 0.02), hi = quantile(ys, 0.98);  // ignore a stray outlier when scaling
+  if (opts.zeroLine) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  const span = Math.max(hi - lo, opts.minSpan || 1);
+  lo -= span * 0.08; hi += span * 0.08;
+  const xOf = (v) => m.l + ((v - x0) / (x1 - x0 || 1)) * iw;
+  const yOf = (v) => { const c = Math.min(hi, Math.max(lo, v)), f = (c - lo) / (hi - lo); return m.t + (opts.invert ? f : 1 - f) * ih; };
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opts.label });
 
-  // Y grid
-  const step = invert ? [15, 30, 60, 120].find((s) => (hi - lo) / s <= 6) || 120
-                      : [0.5, 1, 2, 5, 10].find((s) => (hi - lo) / s <= 6) || 10;
+  const step = opts.ySteps.find((s) => (hi - lo) / s <= 6) || opts.ySteps[opts.ySteps.length - 1];
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
-    svg.append(svgEl("line", { x1: m.l, x2: W - m.r, y1: yOf(v), y2: yOf(v), class: "grid" }),
-               svgEl("text", { x: m.l - 8, y: yOf(v) + 4, "text-anchor": "end" }, fmt(v)));
+    svg.append(svgEl("line", { x1: m.l, x2: W - m.r, y1: yOf(v), y2: yOf(v), class: v === 0 && opts.zeroLine ? "zero" : "grid" }),
+               svgEl("text", { x: m.l - 8, y: yOf(v) + 4, "text-anchor": "end" }, opts.fmtY(v)));
   }
-  // X ticks: weekly for short windows, monthly otherwise
-  const days = (x1 - x0) / DAY_MS;
-  const ticks = [];
-  if (days <= 45) {
-    const d = new Date(x0); d.setUTCDate(d.getUTCDate() + ((8 - d.getUTCDay()) % 7));  // Mondays
-    for (let t = d.getTime(); t <= x1; t += 7 * DAY_MS) ticks.push(t);
-  } else {
-    const d = new Date(x0); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
-    const every = days > 400 ? 3 : 1;
-    for (; d.getTime() <= x1; d.setUTCMonth(d.getUTCMonth() + every)) ticks.push(d.getTime());
-  }
-  for (const t of ticks) {
+  for (const [t, label] of opts.xTicks(x0, x1)) {
     svg.append(svgEl("line", { x1: xOf(t), x2: xOf(t), y1: m.t, y2: m.t + ih, class: "grid" }),
-               svgEl("text", { x: xOf(t), y: H - 8, "text-anchor": "middle" }, shortDate(t, days > 400)));
+               svgEl("text", { x: xOf(t), y: H - 8, "text-anchor": "middle" }, label));
   }
-  if (invert) {
-    svg.append(svgEl("text", { x: 4, y: m.t + 10 }, "faster"), svgEl("text", { x: 4, y: m.t + ih }, "slower"));
-  }
+  if (opts.topLabel) svg.append(svgEl("text", { x: 4, y: m.t + 10 }, opts.topLabel), svgEl("text", { x: 4, y: m.t + ih }, opts.bottomLabel));
 
-  // Trend lines first (under the dots)
-  for (const [k] of EFFORTS) {
-    const pts = runs.filter((r) => r.effort === k).map((r) => ({ x: dayMs(r.date), y: value(r) }));
-    if (pts.length < 3) continue;
+  const groups = opts.trend === "all" ? [["all", runs, css("--fg")]]
+    : EFFORTS.map(([k]) => [k, runs.filter((r) => r.eff === k), css(`--${k}`)]);
+  for (const [, rs, color] of groups) {
+    if (rs.length < 3) continue;
+    const pts = rs.map((r) => ({ x: opts.x(r), y: opts.y(r) }));
     const f = linearFit(pts);
     const xa = Math.min(...pts.map((p) => p.x)), xb = Math.max(...pts.map((p) => p.x));
-    svg.append(svgEl("line", { x1: xOf(xa), y1: yOf(f(xa)), x2: xOf(xb), y2: yOf(f(xb)), class: "trend",
-                               stroke: css(`--${k}`) }));
+    if (xa === xb) continue;
+    svg.append(svgEl("line", { x1: xOf(xa), y1: yOf(f(xa)), x2: xOf(xb), y2: yOf(f(xb)), class: "trend", stroke: color }));
   }
-  // Dots
   for (const r of runs) {
-    const dot = svgEl("circle", { cx: xOf(dayMs(r.date)), cy: yOf(value(r)), r: 5, class: "dot", fill: css(`--${r.effort}`) });
-    const label = EFFORTS.find(([k]) => k === r.effort)[1];
-    dot.append(svgEl("title", {}, `${shortDate(dayMs(r.date), true)} · ${label} · ${r.distance_mi.toFixed(2)} mi · ${fmtPace(r.pace_sec_per_mile)} /mi` +
-      (r.average_heart_rate ? ` · ${r.average_heart_rate} bpm` : "")));
+    const color = css(`--${r.eff}`);
+    const dot = svgEl("circle", { cx: xOf(opts.x(r)), cy: yOf(opts.y(r)), r: 5, class: "dot",
+      fill: r.isEstimate ? "none" : color, stroke: r.isEstimate ? color : css("--surface") });
+    dot.append(svgEl("title", {}, `${shortDate(dayMs(r.date), true)} · ${LABEL[r.eff]}${r.isEstimate ? " (est.)" : ""} · ` +
+      `${r.distance_mi.toFixed(2)} mi · ${fmtPace(r.pace_sec_per_mile)} /mi` +
+      (r.average_heart_rate ? ` · ${r.average_heart_rate} bpm` : "") + (opts.tip ? ` · ${opts.tip(r)}` : "")));
     dot.addEventListener("click", () => { location.href = `/runs/${r.id}`; });
     svg.append(dot);
   }
   box.replaceChildren(svg);
+}
+
+function timeAxis() {
+  const x0 = dayMs(data.start), x1 = Math.max(dayMs(data.end), x0 + DAY_MS);
+  const days = (x1 - x0) / DAY_MS;
+  return {
+    x: (r) => dayMs(r.date),
+    xRange: () => [x0, x1],
+    xTicks: () => {
+      const ticks = [];
+      if (days <= 45) {
+        const d = new Date(x0); d.setUTCDate(d.getUTCDate() + ((8 - d.getUTCDay()) % 7));  // Mondays
+        for (let t = d.getTime(); t <= x1; t += 7 * DAY_MS) ticks.push([t, shortDate(t)]);
+      } else {
+        const d = new Date(x0); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
+        const every = days > 400 ? 3 : 1;
+        for (; d.getTime() <= x1; d.setUTCMonth(d.getUTCMonth() + every)) ticks.push([d.getTime(), shortDate(d.getTime(), days > 400)]);
+      }
+      return ticks;
+    },
+  };
 }
 
 function weeksChart() {
@@ -229,17 +325,89 @@ function weeksChart() {
   box.replaceChildren(svg);
 }
 
+// ---------- readiness tables ----------
+
+const signed = (v, unit, digits = 0) => {
+  const r = Number(v.toFixed(digits));  // round first, so -0.3 shows as ±0, not −0
+  return `${r > 0 ? "+" : r < 0 ? "−" : "±"}${Math.abs(r).toFixed(digits)}${unit}`;
+};
+
+function factorTable(id, buckets) {
+  const rows = buckets.map(([label, test]) => {
+    const rs = data.runs.filter((r) => r.paceDelta != null && test(r));
+    const pace = rs.length ? rs.reduce((s, r) => s + r.paceDelta, 0) / rs.length : null;
+    const hrRs = rs.filter((r) => r.hrDelta != null);
+    const hr = hrRs.length ? hrRs.reduce((s, r) => s + r.hrDelta, 0) / hrRs.length : null;
+    const paceCell = pace == null ? "–" : el("span", { class: Math.abs(pace) < 3 ? "" : pace < 0 ? "better" : "worse" },
+      Math.abs(pace) < 3 ? "as usual" : `${Math.round(Math.abs(pace))} s/mi ${pace < 0 ? "faster" : "slower"}`);
+    const hrCell = hr == null ? "–" : el("span", { class: Math.abs(hr) < 1 ? "" : hr < 0 ? "better" : "worse" }, signed(hr, " bpm"));
+    return el("tr", { class: rs.length < 3 ? "thin" : "", title: rs.length < 3 ? "Fewer than 3 runs: too few to read much into" : "" },
+      el("td", {}, label), el("td", { class: "r" }, rs.length), el("td", { class: "r" }, paceCell), el("td", { class: "r" }, hrCell));
+  });
+  document.getElementById(id).replaceChildren(el("div", { class: "table-wrap" }, el("table", {},
+    el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", { class: "r" }, "Runs"), el("th", { class: "r" }, "Pace vs usual"),
+                    el("th", { class: "r" }, "HR vs usual"))),
+    el("tbody", {}, rows))));
+}
+
+function renderFactors() {
+  const f = (r) => r.factors || {};
+  factorTable("f-recovery", [
+    ["Green (67%+)", (r) => f(r).recovery >= 67],
+    ["Yellow (34–66%)", (r) => f(r).recovery >= 34 && f(r).recovery < 67],
+    ["Red (0–33%)", (r) => f(r).recovery != null && f(r).recovery < 34],
+  ]);
+  factorTable("f-sleep", [
+    ["Under 6 h", (r) => f(r).sleep_hours != null && f(r).sleep_hours < 6],
+    ["6–7 h", (r) => f(r).sleep_hours >= 6 && f(r).sleep_hours < 7],
+    ["7–8 h", (r) => f(r).sleep_hours >= 7 && f(r).sleep_hours < 8],
+    ["8 h or more", (r) => f(r).sleep_hours >= 8],
+  ]);
+  const acts = (r) => f(r).prev_day_activities;
+  const other = (r) => (acts(r) || []).filter((s) => !["running", "stroller_jogging"].includes(s));
+  factorTable("f-prev", [
+    ["Rest day", (r) => acts(r) && acts(r).length === 0],
+    ["Ran (nothing else)", (r) => acts(r) && acts(r).length > 0 && other(r).length === 0],
+    ["Pickleball", (r) => other(r).includes("pickleball")],
+    ["Other activity", (r) => other(r).length > 0 && !other(r).includes("pickleball")],
+  ]);
+}
+
+// ---------- page ----------
+
 function renderAll() {
+  prepare();
   const from = new Date(dayMs(data.start)).toLocaleDateString(undefined, { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
   const to = new Date(dayMs(data.end)).toLocaleDateString(undefined, { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
+  const overall = summary(data.runs);
   document.getElementById("range").textContent =
-    `${from} – ${to} · ${data.overall.runs} runs · ${data.overall.miles.toFixed(1)} mi · effort comes from each day's plan`;
+    `${from} – ${to} · ${overall.runs} runs · ${overall.miles.toFixed(1)} mi · effort comes from each day's plan` +
+    (useEstimates ? ", or is estimated (hollow dots) for unlabeled runs" : "");
+  const rule = data.estimate_rule;
+  document.getElementById("est-label").title = `Estimate: ${rule.long_run_mi}+ mi = Race pace; average heart rate ` +
+    `${rule.tempo_hr ? `${rule.tempo_hr}+ bpm (your top quarter)` : "in your top quarter"} = Tempo; otherwise Easy. ` +
+    "Runs without heart rate stay unlabeled. Planned efforts are never changed.";
   renderCards();
-  legend("legend-pace");
-  legend("legend-dist");
-  scatter("chart-pace", (r) => r.pace_sec_per_mile, { invert: true, fmt: fmtPace });
-  scatter("chart-dist", (r) => r.distance_mi, { fmt: (v) => `${+v.toFixed(1)} mi` });
+  renderLegends();
+  document.getElementById("bpm-caveat").hidden = !data.runs.some((r) => r.isEstimate);
+  const t = timeAxis();
+  scatter("chart-pace", { ...t, label: "Pace over time", y: (r) => r.pace_sec_per_mile, invert: true, minSpan: 30,
+    ySteps: [15, 30, 60, 120], fmtY: fmtPace, trend: "effort", topLabel: "faster", bottomLabel: "slower" });
+  scatter("chart-dist", { ...t, label: "Distance over time", y: (r) => r.distance_mi, ySteps: [0.5, 1, 2, 5, 10],
+    fmtY: (v) => `${+v.toFixed(1)} mi`, trend: "effort" });
   weeksChart();
+  renderFactors();
+  scatter("chart-recovery", {
+    label: "Pace vs recovery", height: 280, x: (r) => (r.factors || {}).recovery, xRange: () => [0, 100],
+    xTicks: () => [0, 20, 40, 60, 80, 100].map((v) => [v, `${v}%`]),
+    y: (r) => r.paceDelta, invert: true, zeroLine: true, minSpan: 20, ySteps: [10, 15, 30, 60],
+    fmtY: (v) => (v === 0 ? "usual" : signed(-v, "s")), trend: "all", topLabel: "faster", bottomLabel: "slower",
+    tip: (r) => `recovery ${Math.round(r.factors.recovery)}%`,
+    empty: "Not enough runs per effort in this window to compare (each effort needs 2+ runs).",
+  });
+  scatter("chart-bpm", { ...t, label: "Heartbeats per mile", y: (r) => r.beats_per_mile, invert: true, minSpan: 100,
+    ySteps: [25, 50, 100, 200], fmtY: (v) => `${Math.round(v)}`, trend: "effort", topLabel: "fitter", bottomLabel: "",
+    tip: (r) => `${r.beats_per_mile} beats/mi`, empty: "No runs with WHOOP heart rate in this window." });
 }
 
 async function load(win) {
@@ -254,6 +422,13 @@ async function load(win) {
 }
 
 document.querySelectorAll(".windows button").forEach((b) => b.addEventListener("click", () => load(b.dataset.w)));
+const estBox = document.getElementById("est");
+estBox.checked = useEstimates;
+estBox.addEventListener("change", () => {
+  useEstimates = estBox.checked;
+  try { localStorage.setItem("analytics.estimates", useEstimates ? "1" : "0"); } catch (e) { /* ignore */ }
+  if (data) renderAll();
+});
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => data && renderAll(), 150); });
 const fromHash = location.hash.slice(1);

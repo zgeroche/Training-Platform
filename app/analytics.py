@@ -2,22 +2,43 @@
 
 A run's effort comes from the plan for its local calendar day (Easy / Race pace / Tempo).
 Runs on days without a planned run (before training started, rest days, unplanned days)
-are "unlabeled": they still count in overall numbers and weekly mileage.
+are "unlabeled": they still count in overall numbers and weekly mileage. For those, an
+*estimated* effort is also given (clearly separate; see estimate_effort).
+
+Each run also carries:
+  - readiness factors: that morning's WHOOP recovery, the night's sleep, and the day before
+    (strain and activities), using WHOOP cycles (sleep onset to sleep onset) as days;
+  - heartbeats per mile: average heart rate x minutes per mile (lower = fitter).
 
 Distance, time and pace come from Samsung; heart rate from the matched WHOOP workout.
 """
 
-from datetime import date, timedelta
+from bisect import bisect_right
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.calendar_data import MILE_M, _samsung_local
-from app.models import PlanPhase, RunMatch, SamsungRun, WhoopWorkout
+from app.models import (
+    PlanPhase,
+    RunMatch,
+    SamsungRun,
+    WhoopCycle,
+    WhoopRecovery,
+    WhoopSleep,
+    WhoopWorkout,
+)
 from app.plans import EFFORTS, plans_between
 
 WINDOWS = {"4w": 28, "3m": 91, "6m": 182}  # days back from today; plus "training" and "all"
 UNLABELED = "unlabeled"
+MS_PER_HOUR = 3_600_000
+
+# Effort estimate for unlabeled runs, following the user's own week: the long run is the
+# race-pace run, the pushed run has a high heart rate, everything else is easy.
+LONG_RUN_MI = 7.0
+TEMPO_HR_PERCENTILE = 0.75  # top quarter of the user's average run heart rates
 
 
 def window_start(session: Session, window: str, today: date) -> date:
@@ -46,6 +67,83 @@ def _summary(runs: list[dict]) -> dict:
     }
 
 
+# ---------- readiness factors ----------
+
+class _WhoopDays:
+    """WHOOP cycles, recoveries, sleeps and workouts around a time range, for fast per-run lookups."""
+
+    def __init__(self, session: Session, lo: datetime, hi: datetime):
+        pad = timedelta(days=3)
+        self.cycles = session.scalars(
+            select(WhoopCycle).where(WhoopCycle.start.between(lo - pad, hi + pad)).order_by(WhoopCycle.start)
+        ).all()
+        self.starts = [c.start for c in self.cycles]
+        ids = [c.id for c in self.cycles]
+        self.recovery = {r.cycle_id: r for r in session.scalars(select(WhoopRecovery).where(WhoopRecovery.cycle_id.in_(ids)))}
+        sleep_ids = [r.sleep_id for r in self.recovery.values() if r.sleep_id]
+        self.sleep = {s.id: s for s in session.scalars(select(WhoopSleep).where(WhoopSleep.id.in_(sleep_ids)))}
+        self.workouts = session.scalars(
+            select(WhoopWorkout).where(WhoopWorkout.start.between(lo - pad, hi + pad)).order_by(WhoopWorkout.start)
+        ).all()
+        self.workout_starts = [w.start for w in self.workouts]
+
+    def _activities(self, start: datetime, end: datetime) -> list[str]:
+        i = bisect_right(self.workout_starts, start - timedelta(microseconds=1))
+        out = []
+        while i < len(self.workouts) and self.workouts[i].start < end:
+            out.append(self.workouts[i].sport_name or "activity")
+            i += 1
+        return out
+
+    def factors(self, run_start: datetime) -> dict:
+        i = bisect_right(self.starts, run_start) - 1
+        if i < 0:
+            return {}
+        cycle = self.cycles[i]
+        rec = self.recovery.get(cycle.id)
+        sleep = self.sleep.get(rec.sleep_id) if rec and rec.sleep_id else None
+        asleep_ms = sum(v or 0 for v in (
+            sleep.total_light_sleep_time_milli, sleep.total_slow_wave_sleep_time_milli, sleep.total_rem_sleep_time_milli
+        )) if sleep else 0
+        prev = self.cycles[i - 1] if i > 0 else None
+        return {
+            "recovery": rec.recovery_score if rec else None,
+            "hrv_ms": rec.hrv_rmssd_milli if rec else None,
+            "resting_heart_rate": rec.resting_heart_rate if rec else None,
+            "sleep_hours": round(asleep_ms / MS_PER_HOUR, 2) if asleep_ms else None,
+            "sleep_performance": sleep.sleep_performance_percentage if sleep else None,
+            "prev_day_strain": prev.strain if prev else None,
+            "prev_day_activities": self._activities(prev.start, prev.end or cycle.start) if prev else None,
+        }
+
+
+# ---------- effort estimate ----------
+
+def tempo_hr_threshold(session: Session) -> float | None:
+    """Average heart rate at the user's 75th percentile across all matched non-long runs."""
+    rows = session.execute(
+        select(WhoopWorkout.average_heart_rate, SamsungRun.distance_m)
+        .join(RunMatch, RunMatch.whoop_workout_id == WhoopWorkout.id)
+        .join(SamsungRun, SamsungRun.id == RunMatch.samsung_run_id)
+        .where(WhoopWorkout.average_heart_rate.is_not(None))
+    ).all()
+    hrs = sorted(hr for hr, dist in rows if dist and dist / MILE_M < LONG_RUN_MI)
+    if len(hrs) < 8:
+        return None
+    return float(hrs[min(len(hrs) - 1, round(TEMPO_HR_PERCENTILE * (len(hrs) - 1)))])
+
+
+def estimate_effort(distance_mi: float, avg_hr: float | None, tempo_hr: float | None) -> str | None:
+    """A rough guess at effort for a run with no plan. None when there's no heart rate to go on."""
+    if distance_mi >= LONG_RUN_MI:
+        return "race_pace"
+    if avg_hr is None or tempo_hr is None:
+        return None
+    return "tempo" if avg_hr >= tempo_hr else "easy"
+
+
+# ---------- main ----------
+
 def analytics(session: Session, window: str, today: date) -> dict:
     start = window_start(session, window, today)
     lo = start - timedelta(days=1)  # local dates can sit a day off UTC
@@ -57,6 +155,9 @@ def analytics(session: Session, window: str, today: date) -> dict:
         .order_by(SamsungRun.start)
     ).all()
     plans = plans_between(session, start, today)
+    whoop = _WhoopDays(session, datetime.combine(lo, datetime.min.time()),
+                       datetime.combine(today + timedelta(days=2), datetime.min.time()))
+    tempo_hr = tempo_hr_threshold(session)
 
     runs = []
     for run, avg_hr in rows:
@@ -67,17 +168,22 @@ def analytics(session: Session, window: str, today: date) -> dict:
         plan = plans.get(d)
         planned_run = plan is not None and plan["kind"] == "run"
         miles = run.distance_m / MILE_M
+        pace = run.duration_ms / 1000 / miles
+        effort = (plan["effort"] or UNLABELED) if planned_run else UNLABELED
         runs.append({
             "id": run.id,
             "date": d.isoformat(),
             "start_local": local.isoformat(timespec="minutes"),
             "distance_mi": round(miles, 2),
             "duration_ms": run.duration_ms,
-            "pace_sec_per_mile": round(run.duration_ms / 1000 / miles, 1),
-            "effort": (plan["effort"] or UNLABELED) if planned_run else UNLABELED,
+            "pace_sec_per_mile": round(pace, 1),
+            "effort": effort,
+            "estimated_effort": estimate_effort(miles, avg_hr, tempo_hr) if effort == UNLABELED else None,
             "length": plan["length"] if planned_run else None,
             "planned_mi": plan["distance_mi"] if planned_run else None,
             "average_heart_rate": avg_hr,
+            "beats_per_mile": round(avg_hr * pace / 60) if avg_hr else None,
+            "factors": whoop.factors(run.start),
         })
 
     # Weekly mileage, Monday-first weeks covering the window.
@@ -103,6 +209,7 @@ def analytics(session: Session, window: str, today: date) -> dict:
         "end": today.isoformat(),
         "overall": _summary(runs),
         "by_effort": by_effort,
+        "estimate_rule": {"long_run_mi": LONG_RUN_MI, "tempo_hr": tempo_hr},
         "runs": runs,
         "weeks": weeks,
     }

@@ -64,6 +64,52 @@ def test_windows():
     assert week["miles"] == 11.0 and week["planned_miles"] == 3.0   # only Tuesday has default miles in WEEK
 
 
+def test_readiness_factors_and_beats_per_mile():
+    from app.models import WhoopCycle, WhoopRecovery, WhoopSleep
+
+    _seed()
+    H = 3_600_000
+    with SessionLocal() as s:
+        s.add_all([
+            # Tue cycle (bed Mon 10 PM MST) with recovery + sleep; Mon cycle before it with evening pickleball.
+            WhoopCycle(id=1, start=datetime(2026, 11, 16, 5, 0), end=datetime(2026, 11, 17, 5, 0), strain=9.5,
+                       timezone_offset="-07:00", raw={}),
+            WhoopCycle(id=2, start=datetime(2026, 11, 17, 5, 0), end=datetime(2026, 11, 18, 5, 0), strain=12.0,
+                       timezone_offset="-07:00", raw={}),
+            WhoopSleep(id="s2", cycle_id=2, start=datetime(2026, 11, 17, 5, 0), end=datetime(2026, 11, 17, 13, 0),
+                       total_light_sleep_time_milli=4 * H, total_slow_wave_sleep_time_milli=H,
+                       total_rem_sleep_time_milli=2 * H, sleep_performance_percentage=88, raw={}),
+            WhoopRecovery(cycle_id=2, sleep_id="s2", recovery_score=71, hrv_rmssd_milli=45.0,
+                          resting_heart_rate=60, raw={}),
+            WhoopWorkout(id="pb", sport_name="pickleball", start=datetime(2026, 11, 17, 1, 0),
+                         end=datetime(2026, 11, 17, 2, 0), raw={}),
+        ])
+        s.commit()
+        a = analytics(s, "training", TODAY)
+    tue = next(r for r in a["runs"] if r["id"] == "tue")
+    assert tue["factors"]["recovery"] == 71 and tue["factors"]["sleep_hours"] == 7.0
+    assert tue["factors"]["prev_day_strain"] == 9.5
+    assert tue["factors"]["prev_day_activities"] == ["pickleball"]
+    wed = next(r for r in a["runs"] if r["id"] == "wed")
+    assert wed["beats_per_mile"] == 1500  # 150 bpm x 10:00/mi
+    assert tue["beats_per_mile"] is None   # no WHOOP match, no heart rate
+
+
+def test_effort_estimate_rule():
+    from app.analytics import estimate_effort
+
+    assert estimate_effort(8.0, None, 163) == "race_pace"   # long run, even without heart rate
+    assert estimate_effort(3.0, 170, 163) == "tempo"
+    assert estimate_effort(3.0, 155, 163) == "easy"
+    assert estimate_effort(3.0, None, 163) is None          # nothing to go on
+    _seed()
+    with SessionLocal() as s:
+        a = analytics(s, "all", TODAY)
+    labeled = {r["id"]: r["estimated_effort"] for r in a["runs"] if r["effort"] != "unlabeled"}
+    assert set(labeled.values()) == {None}  # planned runs never get an estimate
+    assert next(r for r in a["runs"] if r["id"] == "old")["estimated_effort"] is None  # no HR, not long
+
+
 def test_api():
     _seed()
     assert local.get("/api/analytics?window=training").status_code == 200
