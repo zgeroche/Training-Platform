@@ -71,6 +71,12 @@ def calendar_days(session: Session, first: date, last: date, today: date) -> lis
                    "run_miles": 0.0}
         d += timedelta(days=1)
 
+    run_strain = dict(session.execute(
+        select(RunMatch.samsung_run_id, WhoopWorkout.strain)
+        .join(WhoopWorkout, WhoopWorkout.id == RunMatch.whoop_workout_id)
+        .join(SamsungRun, SamsungRun.id == RunMatch.samsung_run_id)
+        .where(SamsungRun.start.between(lo, hi))
+    ).all())
     for run in session.scalars(select(SamsungRun).where(SamsungRun.start.between(lo, hi)).order_by(SamsungRun.start)):
         local = _samsung_local(run)
         day = days.get(local.date())
@@ -80,7 +86,7 @@ def calendar_days(session: Session, first: date, last: date, today: date) -> lis
         pace = run.duration_ms / 1000 / miles if run.duration_ms and miles else None
         day["runs"].append({"id": run.id, "start_local": local.isoformat(timespec="minutes"),
                             "distance_mi": round(miles, 2), "duration_ms": run.duration_ms,
-                            "pace_sec_per_mile": pace})
+                            "pace_sec_per_mile": pace, "strain": run_strain.get(run.id)})
         day["run_miles"] += miles
 
     matched = set(session.scalars(select(RunMatch.whoop_workout_id)))

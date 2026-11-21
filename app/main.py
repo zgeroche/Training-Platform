@@ -179,16 +179,57 @@ def index() -> str:
             f"{'aren' if len(waiting) != 1 else 'isn'}'t on the Runs page yet. "
             f"{'They' if len(waiting) != 1 else 'It'}'ll appear after the next phone sync.<ul>{items}</ul></div>"
         )
-    return f"""<!doctype html><html><head><meta charset=utf-8><title>Training Platform</title>
-<style>body{{font-family:system-ui;max-width:860px;margin:2rem auto;padding:0 1rem}}
-table{{border-collapse:collapse;margin:1rem 0}}td,th{{border:1px solid #ccc;padding:4px 10px;text-align:left}}
-.warn{{color:#b45309}}.btn,button{{display:inline-block;padding:6px 14px;margin:4px 0}}form{{display:inline-block;margin-right:8px}}
-.waiting{{border-left:3px solid #b45309;padding:4px 12px;margin:8px 0}}.waiting ul{{margin:4px 0}}</style>
-</head><body><h1>Training Platform</h1><p><a href=/runs><b>Runs →</b></a> &nbsp; <a href=/training><b>Training →</b></a> &nbsp; <a href=/analytics><b>Analytics →</b></a></p>{action}
-<h2>Sync status</h2>{whoop_status}{samsung_status}
-<h2>Stored records</h2><table>{count_rows}</table>
-<p>JSON: <a href=/api/runs>/api/runs</a> · <a href=/api/workouts>/api/workouts</a> · <a href=/api/recovery>/api/recovery</a> ·
-<a href=/api/sleep>/api/sleep</a> · <a href=/api/cycles>/api/cycles</a> · <a href=/docs>/docs</a></p>
+    return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1"><title>Training Platform</title>
+<link rel=stylesheet href=/static/style.css><script src=/static/theme.js></script>
+<style>
+.go {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; }}
+.go a {{ display:grid; gap:6px; color:var(--fg); border-top:4px solid var(--accent); }}
+.go a:hover {{ text-decoration:none; border-color:var(--accent-2); }}
+.go b {{ font-size:1.3rem; }}
+.go span {{ color:var(--muted); font-size:15px; }}
+.home-grid {{ display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:16px; align-items:start; }}
+@media (max-width:900px) {{ .home-grid {{ grid-template-columns:minmax(0,1fr); }} }}
+.panel p {{ margin:0 0 10px; }}
+.warn {{ color:var(--warn); }}
+form {{ display:inline-block; margin:4px 8px 0 0; }}
+button, .btn {{ font:inherit; font-size:15px; padding:8px 16px; border-radius:8px; border:1px solid var(--line);
+               background:var(--surface); color:var(--fg); cursor:pointer; display:inline-block; }}
+button:hover, .btn:hover {{ border-color:var(--accent); text-decoration:none; }}
+.waiting {{ border-left:3px solid var(--warn); padding:6px 14px; margin:10px 0 0; background:var(--surface-2); border-radius:0 8px 8px 0; }}
+.waiting ul {{ margin:6px 0 0; }}
+.api {{ font-size:13px; }}
+.dash {{ display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,.8fr); gap:16px; }}
+@media (max-width:1100px) {{ .dash {{ grid-template-columns:minmax(0,1fr); }} }}
+.dash-card {{ display:grid; gap:12px; align-content:start; }}
+.dash-card h2 {{ margin:0; }}
+.dash-rings {{ display:flex; gap:28px; align-items:center; flex-wrap:wrap; }}
+.dash-sleep {{ display:grid; gap:4px; }}
+.dash-miles .big-num {{ font-size:3rem; }}
+.dash-bar {{ height:8px; border-radius:4px; background:var(--line); overflow:hidden; }}
+.dash-bar > div {{ height:100%; background:var(--accent); border-radius:4px; }}
+.dash-next {{ display:grid; gap:4px; border-top:1px solid var(--line); padding-top:12px; font-size:16px; }}
+.dash-next a {{ color:var(--fg); }}
+.dash-race .big-num {{ font-size:3.4rem; color:var(--accent); }}
+</style></head><body>
+<main class=page>
+  <header><h1>Training Platform</h1><p class=sub>Samsung runs, WHOOP recovery, and your marathon plan in one place.</p></header>
+  <div class=dash id=dash><p class=muted>Loading today…</p></div>
+  <section class=go>
+    <a class=panel href=/runs><b>Runs →</b><span>Every run with its route, splits, pace and WHOOP heart rate.</span></a>
+    <a class=panel href=/training><b>Training →</b><span>Your weekly plan, planned vs actual, and the race-day countdown.</span></a>
+    <a class=panel href=/analytics><b>Analytics →</b><span>Trends by effort, readiness, sleep and recovery.</span></a>
+  </section>
+  <section class=home-grid>
+    <div class=panel><h2>Sync status</h2>{whoop_status}{samsung_status}</div>
+    <div class=panel><h2>WHOOP connection</h2>{action}</div>
+  </section>
+  <section class=panel><h2>Stored records</h2><div class=table-wrap><table>{count_rows}</table></div>
+    <p class="muted api" style="margin-top:12px">JSON: <a href=/api/runs>/api/runs</a> · <a href=/api/workouts>/api/workouts</a> ·
+    <a href=/api/recovery>/api/recovery</a> · <a href=/api/sleep>/api/sleep</a> · <a href=/api/cycles>/api/cycles</a> ·
+    <a href=/docs>/docs</a></p></section>
+</main>
+<script src=/static/common.js></script><script>mountNav("home");</script><script src=/static/home.js></script>
 </body></html>"""
 
 

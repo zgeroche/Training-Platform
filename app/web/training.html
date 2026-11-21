@@ -5,35 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Training · Training Platform</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
 <style>
-  .page { max-width: 1400px; }
   .cal-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
   .cal-nav { display: flex; gap: 8px; align-items: center; }
-  .cal-nav button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
+  .cal-nav button { font: inherit; font-size: 15px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
                     background: var(--surface); color: var(--fg); cursor: pointer; }
   .cal-nav button:hover { border-color: var(--accent); }
   .cal-scroll { overflow-x: auto; }
-  .cal { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)) minmax(110px, .8fr); gap: 1px;
-         background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-width: 960px; }
+  .cal { display: grid; grid-template-columns: repeat(7, minmax(140px, 1fr)) minmax(130px, .8fr); gap: 1px;
+         background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-width: 1100px;
+         box-shadow: var(--shadow); }
   .cal > div { background: var(--surface); }
-  .dow { padding: 8px 10px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-  .day { min-height: 112px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
-  .day.other { background: var(--bg); }
+  .dow { padding: 10px 12px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .day { min-height: 150px; padding: 10px 12px; display: flex; flex-direction: column; gap: 5px; }
+  .day.other { background: var(--surface-2); }
   .day.other .num { color: var(--muted); }
   .day.today { box-shadow: inset 0 0 0 2px var(--accent); }
-  .day-top { display: flex; justify-content: space-between; align-items: center; }
-  .num { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .rec { width: 10px; height: 10px; border-radius: 50%; }
-  .rec-green { background: #16a34a; } .rec-yellow { background: #eab308; } .rec-red { background: #dc2626; }
-  .chip { display: block; font-size: 13px; padding: 2px 8px; border-radius: 6px; white-space: nowrap;
-          overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-  a.chip.run { background: var(--accent-soft); color: var(--fg); border-left: 3px solid var(--accent); }
+  .day-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .num { font-weight: 700; font-size: 17px; font-variant-numeric: tabular-nums; }
+  .chip { display: flex; justify-content: space-between; gap: 6px; font-size: 14px; padding: 3px 9px; border-radius: 6px;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  .chip > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+  a.chip.run { background: var(--accent-soft); color: var(--fg); border-left: 3px solid var(--accent); font-weight: 600; }
   a.chip.run:hover { text-decoration: none; filter: brightness(1.05); }
-  .chip.act { color: var(--muted); padding-left: 11px; }
-  .week { padding: 8px 10px; display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  .chip.act { color: var(--muted); padding-left: 12px; }
+  .strain { font-size: 12px; font-weight: 700; color: var(--strain); flex: none; }
+  .strain::before { content: "strain "; font-weight: 400; color: var(--muted); }
+  .week { padding: 10px 12px; display: flex; flex-direction: column; justify-content: center; gap: 3px;
           font-variant-numeric: tabular-nums; }
-  .week .miles { font-size: 1.15rem; font-weight: 600; }
-  .week .sub { font-size: 12px; color: var(--muted); }
+  .week .miles { font-size: 1.4rem; font-weight: 700; }
+  .week .sub { font-size: 13px; color: var(--muted); }
   .day { cursor: pointer; }
   .day:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
   .day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -66,20 +68,21 @@
   .dialog-actions .danger { margin-right: auto; color: var(--warn); }
   .dialog-error { color: var(--warn); font-size: 13px; min-height: 1em; margin: 0; }
   :root { --ok: #15803d; --short: #b45309; --bad: #b91c1c; --extra: #2563eb; }
-  @media (prefers-color-scheme: dark) { :root { --ok: #4ade80; --short: #fbbf24; --bad: #f87171; --extra: #60a5fa; } }
-  .status { font-size: 12px; font-weight: 600; padding: 0 2px; margin-top: auto; font-variant-numeric: tabular-nums; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ok: #4ade80; --short: #fbbf24; --bad: #f87171; --extra: #60a5fa; } }
+  :root[data-theme="dark"] { --ok: #4ade80; --short: #fbbf24; --bad: #f87171; --extra: #60a5fa; }
+  .status { font-size: 13px; font-weight: 700; padding: 0 2px; margin-top: auto; font-variant-numeric: tabular-nums; }
   .status.done { color: var(--ok); } .status.short { color: var(--short); }
   .status.missed { color: var(--bad); } .status.extra { color: var(--extra); }
   .day.race { box-shadow: inset 0 0 0 2px var(--accent); background: linear-gradient(180deg, var(--accent-soft), var(--surface)); }
   .chip.plan.race { border: 1px solid var(--accent); background: var(--accent); color: #fff; font-weight: 600; }
-  .race-label { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  .race-label { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
   .countdown { color: var(--muted); margin: 4px 0 0; }
   .countdown b { color: var(--fg); }
-  .week .vs { font-size: 13px; color: var(--muted); }
-  .week .tally { font-size: 12px; display: flex; flex-wrap: wrap; gap: 0 8px; }
+  .week .vs { font-size: 14px; color: var(--muted); }
+  .week .tally { font-size: 13px; display: flex; flex-wrap: wrap; gap: 0 8px; }
   .week-bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin: 2px 0; }
   .week-bar > div { height: 100%; background: var(--accent); }
-  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); align-items: center; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); align-items: center; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
 </style>
 </head>
@@ -101,9 +104,10 @@
   </div>
 
   <div class="legend">
-    <span><span class="chip run" style="display:inline-block;padding:0 6px">6.20</span> run (miles), opens the run</span>
+    <span><span class="chip run" style="display:inline-flex;padding:0 6px">6.20 mi</span> run (click to open it)</span>
     <span>Pickleball: other activity from WHOOP</span>
-    <span><i class="rec rec-green"></i><i class="rec rec-yellow"></i><i class="rec rec-red"></i> recovery that morning</span>
+    <span><span class="strain">12.8</span> = WHOOP strain of a run or activity</span>
+    <span><span class="rec-pill rec-green">72%</span> <span class="rec-pill rec-yellow">50%</span> <span class="rec-pill rec-red">20%</span> recovery that morning</span>
     <span><span class="chip plan" style="display:inline-block;padding:0 6px">Short · Tempo</span> plan from the weekly plan</span>
     <span><span class="chip plan changed" style="display:inline-block;padding:0 6px">Long · 9.0 mi</span> changed for that day</span>
     <span>Click any day to change its plan.</span>
@@ -193,6 +197,7 @@
 </dialog>
 
 <script src="/static/common.js"></script>
+<script>mountNav("training");</script>
 <script>
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -216,10 +221,6 @@ function shiftMonth(ym, delta) {
   return `${y}-${String(m).padStart(2, "0")}`;
 }
 
-function recBand(score) {
-  return score >= 67 ? "rec-green" : score >= 34 ? "rec-yellow" : "rec-red";
-}
-
 function render(data) {
   shown = `${data.year}-${String(data.month).padStart(2, "0")}`;
   document.getElementById("month-title").textContent =
@@ -239,15 +240,18 @@ function render(data) {
       const top = el("div", { class: "day-top" },
         el("span", { class: "num" }, d, isRace ? el("span", { class: "race-label" }, " Race day") : ""));
       if (day.recovery != null) {
-        top.append(el("i", { class: `rec ${recBand(day.recovery)}`, title: `Recovery ${Math.round(day.recovery)}%` }));
+        top.append(el("span", { class: `rec-pill ${recBand(day.recovery)}`, title: "WHOOP recovery that morning" },
+          `${Math.round(day.recovery)}%`));
       }
+      const strainTag = (s) => (s != null ? el("span", { class: "strain" }, s.toFixed(1)) : "");
       const runs = day.runs.map((r) => el("a", {
         class: "chip run", href: `/runs/${r.id}`,
-        title: `${fmtNum(r.distance_mi, 2)} mi · ${fmtDuration(r.duration_ms)} · ${fmtPace(r.pace_sec_per_mile)} /mi`,
-      }, `${fmtNum(r.distance_mi, 2)} mi`));
+        title: `${fmtNum(r.distance_mi, 2)} mi · ${fmtDuration(r.duration_ms)} · ${fmtPace(r.pace_sec_per_mile)} /mi` +
+               (r.strain != null ? ` · strain ${r.strain.toFixed(1)}` : ""),
+      }, el("span", {}, `${fmtNum(r.distance_mi, 2)} mi`), strainTag(r.strain)));
       const acts = day.activities.map((a) => el("span", {
         class: "chip act", title: `${sportName(a.sport)}${a.minutes ? ` · ${a.minutes} min` : ""}${a.strain != null ? ` · strain ${a.strain.toFixed(1)}` : ""}`,
-      }, sportName(a.sport)));
+      }, el("span", {}, sportName(a.sport)), strainTag(a.strain)));
       const p = day.plan;
       const plan = p
         ? [el("span", {

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Runs · Training Platform</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
 <style>
   th.sortable { padding: 0; }
   th.sortable button {
@@ -39,6 +40,7 @@
 </main>
 
 <script src="/static/common.js"></script>
+<script>mountNav("runs");</script>
 <script>
 const kcal = (r) => (r.whoop && r.whoop.kilojoule != null ? r.whoop.kilojoule / 4.184 : null);
 
