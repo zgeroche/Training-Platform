@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics · Training Platform</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  /* Effort colors are shared by cards, dots and trend lines. */
+  :root { --easy: #0d9488; --race_pace: #7c3aed; --tempo: #ea580c; --unlabeled: #94a3b8; }
+  @media (prefers-color-scheme: dark) { :root { --easy: #2dd4bf; --race_pace: #a78bfa; --tempo: #fb923c; --unlabeled: #64748b; } }
+  .page { max-width: 1400px; }
+  .head { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; justify-content: space-between; }
+  .windows { display: flex; flex-wrap: wrap; gap: 6px; }
+  .windows button { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
+                    background: var(--surface); color: var(--fg); cursor: pointer; }
+  .windows button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .card { border-top: 3px solid var(--c, var(--line)); display: grid; gap: 6px; }
+  .card h2 { margin: 0; font-size: 14px; display: flex; justify-content: space-between; align-items: baseline; }
+  .card h2 .n { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .card .big { font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card .big small { font-size: 13px; color: var(--muted); font-weight: 400; }
+  .card .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .card .kv span:nth-child(odd) { color: var(--muted); }
+  .card.empty { opacity: .55; }
+  .charts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+  @media (max-width: 1000px) { .charts { grid-template-columns: minmax(0, 1fr); } }
+  .chart-head { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; align-items: baseline; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart text { fill: var(--muted); font: 11px var(--font); font-variant-numeric: tabular-nums; }
+  .grid { stroke: var(--line); }
+  .dot { stroke: var(--surface); stroke-width: 1.5; cursor: pointer; }
+  .dot:hover { stroke: var(--fg); }
+  .trend { fill: none; stroke-width: 2.5; stroke-linecap: round; opacity: .85; }
+  .bar { fill: var(--accent); opacity: .85; }
+  .plan-mark { stroke: var(--fg); stroke-width: 2; stroke-dasharray: 3 2; }
+  .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+  .wide { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="crumbs"><a href="/">Training Platform</a> · <a href="/runs">Runs</a> · <a href="/training">Training</a> · <b>Analytics</b></div>
+
+  <div class="head">
+    <div>
+      <h1>Analytics</h1>
+      <p class="sub" id="range">Loading…</p>
+    </div>
+    <div class="windows" role="group" aria-label="Time window">
+      <button type="button" data-w="4w">4 weeks</button>
+      <button type="button" data-w="3m">3 months</button>
+      <button type="button" data-w="6m">6 months</button>
+      <button type="button" data-w="training">Since training started</button>
+      <button type="button" data-w="all">All</button>
+    </div>
+  </div>
+
+  <section class="cards" id="cards"></section>
+
+  <section class="charts">
+    <div class="panel chart">
+      <div class="chart-head"><h2>Pace over time</h2><div class="legend" id="legend-pace"></div></div>
+      <div id="chart-pace"></div>
+      <p class="note">Each dot is a run (click to open it). Faster is higher. Lines show the trend for each effort with 3 or more runs.</p>
+    </div>
+    <div class="panel chart">
+      <div class="chart-head"><h2>Distance over time</h2><div class="legend" id="legend-dist"></div></div>
+      <div id="chart-dist"></div>
+      <p class="note">Each dot is a run, colored by its planned effort.</p>
+    </div>
+    <div class="panel chart wide">
+      <div class="chart-head"><h2>Weekly miles</h2>
+        <div class="legend"><span><i style="background:var(--accent);border-radius:2px"></i>run</span>
+          <span><i style="border:2px dashed var(--fg);border-radius:0;width:12px;height:0"></i>planned</span></div></div>
+      <div id="chart-weeks"></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+const EFFORTS = [["easy", "Easy"], ["race_pace", "Race pace"], ["tempo", "Tempo"], ["unlabeled", "Unlabeled"]];
+const NS = "http://www.w3.org/2000/svg";
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const DAY_MS = 86400000;
+let data = null;
+
+function svgEl(tag, attrs, text) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (text != null) n.textContent = text;
+  return n;
+}
+const dayMs = (iso) => Date.parse(iso + "T00:00:00Z");
+const shortDate = (ms, withYear) => new Date(ms).toLocaleDateString(undefined,
+  { timeZone: "UTC", month: "short", day: "numeric", ...(withYear ? { year: "2-digit" } : {}) });
+
+function linearFit(points) {  // least squares y = a + b x
+  const n = points.length;
+  const mx = points.reduce((s, p) => s + p.x, 0) / n, my = points.reduce((s, p) => s + p.y, 0) / n;
+  let num = 0, den = 0;
+  for (const p of points) { num += (p.x - mx) * (p.y - my); den += (p.x - mx) ** 2; }
+  const b = den ? num / den : 0;
+  return (x) => my + b * (x - mx);
+}
+
+function quantile(sorted, q) { return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))]; }
+
+function renderCards() {
+  const card = (key, label, s, color) => {
+    const pace = s.avg_pace_sec_per_mile;
+    return el("div", { class: `panel card${s.runs ? "" : " empty"}`, style: `--c:${color}` },
+      el("h2", {}, label, el("span", { class: "n" }, `${s.runs} run${s.runs === 1 ? "" : "s"}`)),
+      el("div", { class: "big" }, pace ? fmtPace(pace) : "–", el("small", {}, " /mi avg pace")),
+      el("div", { class: "kv" },
+        el("span", {}, "Avg distance"), el("span", {}, s.avg_distance_mi != null ? `${s.avg_distance_mi.toFixed(2)} mi` : "–"),
+        el("span", {}, "Total"), el("span", {}, `${s.miles.toFixed(1)} mi`),
+        el("span", {}, "Avg HR"), el("span", {}, s.avg_heart_rate != null ? `${s.avg_heart_rate} bpm` : "–")));
+  };
+  document.getElementById("cards").replaceChildren(
+    card("overall", "All runs", data.overall, "var(--accent)"),
+    ...EFFORTS.map(([k, label]) => card(k, label, data.by_effort[k], `var(--${k})`)));
+}
+
+function legend(id) {
+  const present = new Set(data.runs.map((r) => r.effort));
+  document.getElementById(id).replaceChildren(...EFFORTS.filter(([k]) => present.has(k))
+    .map(([k, label]) => el("span", {}, el("i", { style: `background:var(--${k})` }), label)));
+}
+
+/** Scatter of runs over time with per-effort trend lines. */
+function scatter(id, value, { invert = false, fmt, pad = 0.08 }) {
+  const box = document.getElementById(id);
+  const runs = data.runs.filter((r) => value(r) != null);
+  if (!runs.length) { box.replaceChildren(el("p", { class: "muted" }, "No runs in this window.")); return; }
+  const W = Math.max(320, box.clientWidth), H = 300, m = { l: 52, r: 14, t: 12, b: 28 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const x0 = dayMs(data.start), x1 = Math.max(dayMs(data.end), x0 + DAY_MS);
+  const vals = runs.map(value).sort((a, b) => a - b);
+  let lo = quantile(vals, 0.02), hi = quantile(vals, 0.98);  // ignore a stray outlier when scaling
+  const span = Math.max(hi - lo, invert ? 30 : 1);
+  lo -= span * pad; hi += span * pad;
+  const xOf = (ms) => m.l + ((ms - x0) / (x1 - x0)) * iw;
+  const yOf = (v) => {
+    const c = Math.min(hi, Math.max(lo, v)), f = (c - lo) / (hi - lo);
+    return m.t + (invert ? f : 1 - f) * ih;
+  };
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${id.replace("chart-", "")} over time` });
+
+  // Y grid
+  const step = invert ? [15, 30, 60, 120].find((s) => (hi - lo) / s <= 6) || 120
+                      : [0.5, 1, 2, 5, 10].find((s) => (hi - lo) / s <= 6) || 10;
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    svg.append(svgEl("line", { x1: m.l, x2: W - m.r, y1: yOf(v), y2: yOf(v), class: "grid" }),
+               svgEl("text", { x: m.l - 8, y: yOf(v) + 4, "text-anchor": "end" }, fmt(v)));
+  }
+  // X ticks: weekly for short windows, monthly otherwise
+  const days = (x1 - x0) / DAY_MS;
+  const ticks = [];
+  if (days <= 45) {
+    const d = new Date(x0); d.setUTCDate(d.getUTCDate() + ((8 - d.getUTCDay()) % 7));  // Mondays
+    for (let t = d.getTime(); t <= x1; t += 7 * DAY_MS) ticks.push(t);
+  } else {
+    const d = new Date(x0); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
+    const every = days > 400 ? 3 : 1;
+    for (; d.getTime() <= x1; d.setUTCMonth(d.getUTCMonth() + every)) ticks.push(d.getTime());
+  }
+  for (const t of ticks) {
+    svg.append(svgEl("line", { x1: xOf(t), x2: xOf(t), y1: m.t, y2: m.t + ih, class: "grid" }),
+               svgEl("text", { x: xOf(t), y: H - 8, "text-anchor": "middle" }, shortDate(t, days > 400)));
+  }
+  if (invert) {
+    svg.append(svgEl("text", { x: 4, y: m.t + 10 }, "faster"), svgEl("text", { x: 4, y: m.t + ih }, "slower"));
+  }
+
+  // Trend lines first (under the dots)
+  for (const [k] of EFFORTS) {
+    const pts = runs.filter((r) => r.effort === k).map((r) => ({ x: dayMs(r.date), y: value(r) }));
+    if (pts.length < 3) continue;
+    const f = linearFit(pts);
+    const xa = Math.min(...pts.map((p) => p.x)), xb = Math.max(...pts.map((p) => p.x));
+    svg.append(svgEl("line", { x1: xOf(xa), y1: yOf(f(xa)), x2: xOf(xb), y2: yOf(f(xb)), class: "trend",
+                               stroke: css(`--${k}`) }));
+  }
+  // Dots
+  for (const r of runs) {
+    const dot = svgEl("circle", { cx: xOf(dayMs(r.date)), cy: yOf(value(r)), r: 5, class: "dot", fill: css(`--${r.effort}`) });
+    const label = EFFORTS.find(([k]) => k === r.effort)[1];
+    dot.append(svgEl("title", {}, `${shortDate(dayMs(r.date), true)} · ${label} · ${r.distance_mi.toFixed(2)} mi · ${fmtPace(r.pace_sec_per_mile)} /mi` +
+      (r.average_heart_rate ? ` · ${r.average_heart_rate} bpm` : "")));
+    dot.addEventListener("click", () => { location.href = `/runs/${r.id}`; });
+    svg.append(dot);
+  }
+  box.replaceChildren(svg);
+}
+
+function weeksChart() {
+  const box = document.getElementById("chart-weeks");
+  const weeks = data.weeks;
+  if (!weeks.length) { box.replaceChildren(el("p", { class: "muted" }, "No weeks in this window.")); return; }
+  const W = Math.max(320, box.clientWidth), H = 240, m = { l: 44, r: 14, t: 12, b: 28 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const max = Math.max(5, ...weeks.map((w) => Math.max(w.miles, w.planned_miles || 0))) * 1.1;
+  const bw = iw / weeks.length;
+  const yOf = (v) => m.t + ih - (v / max) * ih;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Weekly miles" });
+  const step = [5, 10, 20, 50].find((s) => max / s <= 6) || 50;
+  for (let v = 0; v <= max; v += step) {
+    svg.append(svgEl("line", { x1: m.l, x2: W - m.r, y1: yOf(v), y2: yOf(v), class: "grid" }),
+               svgEl("text", { x: m.l - 8, y: yOf(v) + 4, "text-anchor": "end" }, v));
+  }
+  const labelEvery = Math.ceil(weeks.length / 14);
+  weeks.forEach((w, i) => {
+    const pad = Math.max(Math.min(6, bw * 0.15), (bw - 56) / 2);  // bars at most 56 px wide when weeks are few
+    const x = m.l + i * bw;
+    const bar = svgEl("rect", { x: x + pad, y: yOf(w.miles), width: Math.max(1, bw - 2 * pad), height: m.t + ih - yOf(w.miles), class: "bar", rx: 2 });
+    bar.append(svgEl("title", {}, `Week of ${shortDate(dayMs(w.start), true)}: ${w.miles.toFixed(1)} mi in ${w.runs} run${w.runs === 1 ? "" : "s"}` +
+      (w.planned_miles ? ` · planned ${w.planned_miles.toFixed(1)} mi` : "")));
+    svg.append(bar);
+    if (w.planned_miles) {
+      svg.append(svgEl("line", { x1: x + pad / 2, x2: x + bw - pad / 2, y1: yOf(w.planned_miles), y2: yOf(w.planned_miles), class: "plan-mark" }));
+    }
+    if (i % labelEvery === 0) svg.append(svgEl("text", { x: x + bw / 2, y: H - 8, "text-anchor": "middle" }, shortDate(dayMs(w.start), weeks.length > 30)));
+  });
+  box.replaceChildren(svg);
+}
+
+function renderAll() {
+  const from = new Date(dayMs(data.start)).toLocaleDateString(undefined, { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
+  const to = new Date(dayMs(data.end)).toLocaleDateString(undefined, { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
+  document.getElementById("range").textContent =
+    `${from} – ${to} · ${data.overall.runs} runs · ${data.overall.miles.toFixed(1)} mi · effort comes from each day's plan`;
+  renderCards();
+  legend("legend-pace");
+  legend("legend-dist");
+  scatter("chart-pace", (r) => r.pace_sec_per_mile, { invert: true, fmt: fmtPace });
+  scatter("chart-dist", (r) => r.distance_mi, { fmt: (v) => `${+v.toFixed(1)} mi` });
+  weeksChart();
+}
+
+async function load(win) {
+  document.querySelectorAll(".windows button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.w === win)));
+  try {
+    data = await getJSON(`/api/analytics?window=${win}`);
+    renderAll();
+    try { history.replaceState(null, "", `#${win}`); } catch (e) { /* ignore */ }
+  } catch (err) {
+    document.getElementById("range").textContent = `Couldn't load analytics: ${err.message}`;
+  }
+}
+
+document.querySelectorAll(".windows button").forEach((b) => b.addEventListener("click", () => load(b.dataset.w)));
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => data && renderAll(), 150); });
+const fromHash = location.hash.slice(1);
+load(["4w", "3m", "6m", "training", "all"].includes(fromHash) ? fromHash : "3m");
+</script>
+</body>
+</html>

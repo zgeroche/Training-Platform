@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 
+from app.analytics import analytics
 from app.calendar_data import calendar_month
 from app.config import get_settings
 from app.db import SessionLocal, init_db, utcnow
@@ -183,7 +184,7 @@ def index() -> str:
 table{{border-collapse:collapse;margin:1rem 0}}td,th{{border:1px solid #ccc;padding:4px 10px;text-align:left}}
 .warn{{color:#b45309}}.btn,button{{display:inline-block;padding:6px 14px;margin:4px 0}}form{{display:inline-block;margin-right:8px}}
 .waiting{{border-left:3px solid #b45309;padding:4px 12px;margin:8px 0}}.waiting ul{{margin:4px 0}}</style>
-</head><body><h1>Training Platform</h1><p><a href=/runs><b>Runs →</b></a> &nbsp; <a href=/training><b>Training →</b></a></p>{action}
+</head><body><h1>Training Platform</h1><p><a href=/runs><b>Runs →</b></a> &nbsp; <a href=/training><b>Training →</b></a> &nbsp; <a href=/analytics><b>Analytics →</b></a></p>{action}
 <h2>Sync status</h2>{whoop_status}{samsung_status}
 <h2>Stored records</h2><table>{count_rows}</table>
 <p>JSON: <a href=/api/runs>/api/runs</a> · <a href=/api/workouts>/api/workouts</a> · <a href=/api/recovery>/api/recovery</a> ·
@@ -200,6 +201,11 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 @app.get("/runs", include_in_schema=False)
 def runs_page() -> FileResponse:
     return FileResponse(WEB_DIR / "runs.html")
+
+
+@app.get("/analytics", include_in_schema=False)
+def analytics_page() -> FileResponse:
+    return FileResponse(WEB_DIR / "analytics.html")
 
 
 @app.get("/training", include_in_schema=False)
@@ -401,6 +407,14 @@ def get_calendar(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$", descr
 Kind = Literal["run", "rest", "unplanned"]
 Length = Literal["short", "medium", "long"]
 Effort = Literal["easy", "race_pace", "tempo"]
+
+
+@app.get("/api/analytics")
+def get_analytics(window: Literal["4w", "3m", "6m", "training", "all"] = "3m") -> dict:
+    """Runs in a time window with their planned effort, per-effort summaries, and weekly miles."""
+    today = to_local(datetime.now(timezone.utc).replace(tzinfo=None)).date()
+    with SessionLocal() as s:
+        return analytics(s, window, today)
 
 
 class PlanIn(BaseModel):

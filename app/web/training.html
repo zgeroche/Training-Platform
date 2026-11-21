@@ -85,7 +85,7 @@
 </head>
 <body>
 <main class="page">
-  <div class="crumbs"><a href="/">Training Platform</a> · <a href="/runs">Runs</a> · <b>Training</b></div>
+  <div class="crumbs"><a href="/">Training Platform</a> · <a href="/runs">Runs</a> · <b>Training</b> · <a href="/analytics">Analytics</a></div>
 
   <div class="cal-head">
     <div>
@@ -337,7 +337,10 @@ let editing = null;  // the day being planned
 function syncRunFields() {
   document.getElementById("run-fields").hidden = kindInput.value !== "run";
 }
-kindInput.addEventListener("change", syncRunFields);
+kindInput.addEventListener("change", () => {
+  if (kindInput.value !== "run") { lengthInput.value = ""; effortInput.value = ""; milesInput.value = ""; }  // back to "–"
+  syncRunFields();
+});
 
 function openPlan(day) {
   editing = day;
@@ -420,7 +423,10 @@ function tplRow(wd, d) {
                               "aria-label": `${DOW_LONG[wd]} default miles`, placeholder: "–" });
   if (d.default_miles) miles.value = d.default_miles;
   const sync = () => { const off = kind.value !== "run"; length.disabled = effort.disabled = miles.disabled = off; };
-  kind.addEventListener("change", sync);
+  kind.addEventListener("change", () => {
+    if (kind.value !== "run") { length.value = ""; effort.value = ""; miles.value = ""; }  // back to "–"
+    sync();
+  });
   sync();
   const tr = el("tr", {}, el("td", {}, DOW_LONG[wd]), el("td", {}, kind), el("td", {}, length),
                 el("td", {}, effort), el("td", {}, miles));
